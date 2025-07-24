@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gemini Translator Pro</title>
+    <style>
+        body { font-family: sans-serif; width: 320px; padding: 15px; font-size: 14px; }
+        h3 { text-align: center; margin-top: 0; color: #333; }
+        label { display: block; margin-top: 12px; font-weight: bold; color: #555; }
+        input, select, textarea {
+            width: 98%;
+            padding: 8px;
+            margin-top: 5px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        textarea { resize: vertical; height: 60px; }
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 15px;
+            border: none;
+            border-radius: 4px;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        #saveSettings { background-color: #007BFF; }
+        #saveSettings:hover { background-color: #0056b3; }
+        #translatePage { background-color: #28a745; }
+        #translatePage:hover { background-color: #1e7e34; }
+        #revertPage { background-color: #dc3545; }
+        #revertPage:hover { background-color: #c82333; }
+        #clearCache { background-color: #6c757d; font-size: 12px; padding: 8px; }
+        #clearCache:hover { background-color: #5a6268; }
+        .button-group { display: flex; gap: 10px; }
+        .button-group button { margin-top: 0; }
+        #status {
+            font-size: 12px;
+            margin-top: 10px;
+            text-align: center;
+            color: #555;
+            min-height: 16px;
+        }
+        .section {
+            border-top: 1px solid #eee;
+            margin-top: 15px;
+            padding-top: 15px;
+        }
+        .hint {
+            font-size: 11px;
+            color: #888;
+            margin-top: 3px;
+            font-style: italic;
+        }
+        .feature-note {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 8px;
+            margin-top: 10px;
+            font-size: 12px;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+<h3>Gemini Translator Pro</h3>
+
+<label for="apiKey">Gemini API Key:</label>
+<input type="password" id="apiKey" placeholder="Your API key">
+<div class="hint">Get your API key from Google AI Studio</div>
+
+<label for="modelSelect">Gemini Model:</label>
+<select id="modelSelect">
+    <optgroup label="Gemini 2.5 Family (Latest)">
+        <option value="models/gemini-2.5-pro">Gemini 2.5 Pro (Highest Quality)</option>
+        <option value="models/gemini-2.5-flash">Gemini 2.5 Flash (Excellent)</option>
+        <option value="models/gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite (Fastest)</option>
+    </optgroup>
+    <optgroup label="Gemini 1.5 Family (Stable)">
+        <option value="models/gemini-1.5-pro-latest">Gemini 1.5 Pro (High Quality)</option>
+        <option value="models/gemini-1.5-flash-latest">Gemini 1.5 Flash (Very Fast)</option>
+    </optgroup>
+</select>
+
+<label for="languageSelect">Target Language:</label>
+<select id="languageSelect">
+    <option value="English">English</option>
+    <option value="Spanish">Spanish</option>
+    <option value="French">French</option>
+    <option value="German">German</option>
+    <option value="Japanese">Japanese</option>
+    <option value="Korean">Korean</option>
+    <option value="Portuguese">Portuguese</option>
+    <option value="Russian">Russian</option>
+    <option value="Italian">Italian</option>
+</select>
+
+<label for="autoSites">Auto-translate sites (one per line):</label>
+<textarea id="autoSites" placeholder="e.g., example.com
+another-site.cn"></textarea>
+<div class="hint">Pages from these domains will be auto-translated</div>
+
+<button id="saveSettings">Save All Settings</button>
+
+<div class="section">
+    <div class="button-group">
+        <button id="translatePage">Translate Page</button>
+        <button id="revertPage">Revert Page</button>
+    </div>
+
+    <button id="clearCache">Clear Translation Cache</button>
+</div>
+
+<div class="feature-note">
+    <strong>New Features:</strong><br>
+    • Right-click selected text to translate<br>
+    • Improved API efficiency with caching<br>
+    • Click translated text to toggle original<br>
+    • Progress indicators and better error handling
+</div>
+
+<div id="status"></div>
+
+<script src="popup.js"></script>
+</body>
+</html>
