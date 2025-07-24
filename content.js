@@ -35,7 +35,6 @@ if (!window.isGeminiTranslatorInjected) {
             progress.remove();
         }
     }
-    // testing
     // Create selection translation tooltip - FIXED VERSION
     function createSelectionTooltip(x, y, originalText, translatedText, isLoading = false) {
         console.log('Creating selection tooltip at:', x, y, 'with text:', translatedText.substring(0, 50));
