@@ -33,48 +33,123 @@ chrome.runtime.onInstalled.addListener(() => {
     }
 });
 
-// Handle context menu clicks with enhanced debugging
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-    console.log('Context menu clicked:', info.menuItemId, 'Selection:', info.selectionText);
+// This function will be injected into the page to handle selection translation.
+function replaceAndTranslateSelection(targetLanguage) {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        return; // No active selection.
+    }
 
+    const selectedText = selection.toString().trim();
+    if (!selectedText) {
+        return; // Selection is empty.
+    }
+
+    const CJK_REGEX = /[\u4e00-\u9fa5]/;
+    if (!CJK_REGEX.test(selectedText)) {
+        return; // No Chinese text detected.
+    }
+
+    const range = selection.getRangeAt(0);
+    const container = range.commonAncestorContainer;
+    const element = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+
+    const isInputOrTextarea = element.tagName === 'INPUT' || element.tagName === 'TEXTAREA';
+
+    // Handle translation for <input> and <textarea> fields
+    if (isInputOrTextarea && typeof element.selectionStart === 'number') {
+        const inputEl = element;
+        const start = inputEl.selectionStart;
+        const end = inputEl.selectionEnd;
+        const originalValue = inputEl.value;
+
+        inputEl.value = originalValue.substring(0, start) + "Translating..." + originalValue.substring(end);
+
+        chrome.runtime.sendMessage({
+            action: 'getSelectionTranslation',
+            text: selectedText,
+            targetLanguage: targetLanguage
+        }).then(response => {
+            if (response && response.success) {
+                inputEl.value = originalValue.substring(0, start) + response.translation + originalValue.substring(end);
+            } else {
+                inputEl.value = originalValue; // Revert on failure
+                alert(`Translation failed: ${response?.error || 'Unknown error'}`);
+            }
+        }).catch(error => {
+            inputEl.value = originalValue; // Revert on failure
+            alert(`Translation request failed: ${error.message}`);
+        });
+    } else {
+        // Handle translation for regular DOM nodes (p, div, span, etc.)
+        const wrapper = document.createElement('span');
+        wrapper.className = 'gemini-translated-selection';
+        wrapper.style.cssText = "background-color: #FFFFE0; cursor: wait; font-style: italic;";
+        wrapper.textContent = "Translating...";
+        wrapper.dataset.originalText = selectedText;
+
+        range.deleteContents();
+        range.insertNode(wrapper);
+
+        chrome.runtime.sendMessage({
+            action: 'getSelectionTranslation',
+            text: selectedText,
+            targetLanguage: targetLanguage
+        }).then(response => {
+            wrapper.style.cursor = 'help';
+            wrapper.style.fontStyle = 'normal';
+            if (response && response.success) {
+                const translatedText = response.translation;
+                wrapper.textContent = translatedText;
+                wrapper.title = `Original: ${selectedText}`;
+
+                wrapper.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const isShowingTranslation = this.textContent === translatedText;
+                    this.textContent = isShowingTranslation ? this.dataset.originalText : translatedText;
+                    this.style.backgroundColor = isShowingTranslation ? '#FFE0E6' : '#FFFFE0';
+                });
+            } else {
+                wrapper.textContent = selectedText; // Revert to original text
+                wrapper.style.backgroundColor = '#FFDDDD'; // Error indication
+                wrapper.title = `Translation failed: ${response?.error || 'Unknown error'}`;
+            }
+        }).catch(error => {
+            wrapper.textContent = selectedText; // Revert on error
+            wrapper.style.backgroundColor = '#FFDDDD';
+            wrapper.title = `Translation request failed: ${error.message}`;
+        });
+    }
+}
+
+// Handle context menu clicks by injecting and executing the replacement script
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "translateSelection" && info.selectionText) {
         try {
-            console.log('Processing selection translation for tab:', tab.id);
-
-            // Get target language first
+            await ensureContentScript(tab.id); // Ensure content script is available
             const targetLanguage = await getTargetLanguage();
-            console.log('Target language:', targetLanguage);
 
-            // Ensure content script is injected
-            await ensureContentScript(tab.id);
-            console.log('Content script ensured for tab:', tab.id);
-
-            // Send message with timeout handling
-            const response = await sendMessageWithTimeout(tab.id, {
-                action: 'translateSelection',
-                text: info.selectionText,
-                targetLanguage: targetLanguage
-            }, 5000);
-
-            console.log('Selection translation response:', response);
-
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: replaceAndTranslateSelection,
+                args: [targetLanguage]
+            });
         } catch (error) {
-            console.error('Context menu translation failed:', error);
-            // Try to show error to user
+            console.error('Context menu script execution failed:', error);
             try {
                 await chrome.scripting.executeScript({
                     target: { tabId: tab.id },
-                    func: (errorMsg) => {
-                        alert(`Translation failed: ${errorMsg}`);
-                    },
+                    func: (msg) => alert(`Translation failed: ${msg}`),
                     args: [error.message]
                 });
-            } catch (scriptError) {
-                console.error('Failed to show error message:', scriptError);
+            } catch (alertError) {
+                console.error('Failed to show error alert:', alertError);
             }
         }
     }
 });
+
 
 // Helper function to send messages with timeout
 function sendMessageWithTimeout(tabId, message, timeout = 5000) {

@@ -35,112 +35,6 @@ if (!window.isGeminiTranslatorInjected) {
             progress.remove();
         }
     }
-    // Create selection translation tooltip - FIXED VERSION
-    function createSelectionTooltip(x, y, originalText, translatedText, isLoading = false) {
-        console.log('Creating selection tooltip at:', x, y, 'with text:', translatedText.substring(0, 50));
-
-        // Remove existing tooltip
-        const existingTooltip = document.getElementById('gemini-selection-tooltip');
-        if (existingTooltip) {
-            existingTooltip.remove();
-            console.log('Removed existing tooltip');
-        }
-
-        // Ensure coordinates are within viewport
-        const safeX = Math.max(10, Math.min(x, window.innerWidth - 350));
-        const safeY = Math.max(10, Math.min(y, window.innerHeight - 200));
-
-        console.log('Safe coordinates:', safeX, safeY);
-
-        const tooltip = document.createElement('div');
-        tooltip.id = 'gemini-selection-tooltip';
-        tooltip.style.cssText = `
-            position: fixed !important;
-            left: ${safeX}px !important;
-            top: ${safeY}px !important;
-            background: #333 !important;
-            color: white !important;
-            padding: 15px !important;
-            border-radius: 8px !important;
-            z-index: 999999 !important;
-            max-width: 320px !important;
-            min-width: 200px !important;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
-            font-size: 14px !important;
-            line-height: 1.4 !important;
-            box-shadow: 0 8px 25px rgba(0,0,0,0.5) !important;
-            border: 2px solid #555 !important;
-            word-wrap: break-word !important;
-            pointer-events: auto !important;
-        `;
-
-        if (isLoading) {
-            tooltip.innerHTML = `
-                <div style="display: flex; align-items: center; color: #4CAF50; font-weight: bold;">
-                    <div style="width: 16px; height: 16px; border: 2px solid #4CAF50; border-top: 2px solid transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px;"></div>
-                    Translating...
-                </div>
-                <style>
-                    @keyframes spin {
-                        0% { transform: rotate(0deg); }
-                        100% { transform: rotate(360deg); }
-                    }
-                </style>
-            `;
-        } else {
-            tooltip.innerHTML = `
-                <div style="font-weight: bold; margin-bottom: 12px; color: #4CAF50; border-bottom: 1px solid #555; padding-bottom: 8px;">
-                    Translation Result
-                </div>
-                <div style="margin-bottom: 12px; line-height: 1.5; background: #444; padding: 10px; border-radius: 4px;">
-                    ${translatedText}
-                </div>
-                <div style="font-size: 12px; color: #ccc; line-height: 1.3; background: #2a2a2a; padding: 8px; border-radius: 4px; margin-bottom: 10px;">
-                    <strong>Original:</strong><br>
-                    ${originalText.length > 150 ? originalText.substring(0, 150) + '...' : originalText}
-                </div>
-                <div style="text-align: right;">
-                    <button onclick="document.getElementById('gemini-selection-tooltip').remove()" 
-                            style="background: #4CAF50; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                        Close
-                    </button>
-                </div>
-            `;
-        }
-
-        document.body.appendChild(tooltip);
-        console.log('Tooltip appended to body, element:', tooltip);
-
-        // Verify tooltip was added
-        const addedTooltip = document.getElementById('gemini-selection-tooltip');
-        console.log('Tooltip verification - found in DOM:', !!addedTooltip);
-
-        if (!isLoading) {
-            // Auto-remove after 15 seconds
-            setTimeout(() => {
-                const tooltipToRemove = document.getElementById('gemini-selection-tooltip');
-                if (tooltipToRemove) {
-                    tooltipToRemove.remove();
-                    console.log('Auto-removed tooltip after timeout');
-                }
-            }, 15000);
-
-            // Remove on scroll or window resize
-            const removeTooltip = () => {
-                const tooltipToRemove = document.getElementById('gemini-selection-tooltip');
-                if (tooltipToRemove) {
-                    tooltipToRemove.remove();
-                    console.log('Removed tooltip due to scroll/resize');
-                }
-            };
-
-            window.addEventListener('scroll', removeTooltip, { once: true });
-            window.addEventListener('resize', removeTooltip, { once: true });
-            document.addEventListener('click', removeTooltip, { once: true });
-        }
-
-        return tooltip;
-    }
 
     // Enhanced message listener with ping support
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -157,118 +51,9 @@ if (!window.isGeminiTranslatorInjected) {
             doRevert();
             sendResponse({ received: true });
             return false;
-        } else if (request.action === 'translateSelection') {
-            console.log('Processing selection translation:', request.text.substring(0, 50));
-            doTranslateSelection(request.text, request.targetLanguage);
-            sendResponse({ received: true });
-            return false;
         }
     });
 
-    /**
-     * Translates selected text and shows it in a tooltip - FIXED VERSION
-     */
-    async function doTranslateSelection(text, targetLanguage) {
-        console.log('doTranslateSelection called with:', text.substring(0, 50), targetLanguage);
-
-        if (!text || text.trim().length === 0) {
-            showNotification('No text provided for translation', 'warning');
-            return;
-        }
-
-        if (!CJK_REGEX.test(text)) {
-            showNotification('No Chinese text found in selection', 'warning');
-            return;
-        }
-
-        // Use mouse position if available, otherwise center of screen
-        let x = window.innerWidth / 2;
-        let y = window.innerHeight / 2;
-
-        // Try to get a good position for the tooltip
-        // Since right-click often clears selection, we'll use a smart fallback
-        try {
-            const selection = window.getSelection();
-            if (selection && selection.rangeCount > 0) {
-                const range = selection.getRangeAt(0);
-                const rect = range.getBoundingClientRect();
-                if (rect.width > 0 && rect.height > 0) {
-                    x = rect.left + window.scrollX;
-                    y = rect.bottom + window.scrollY + 10;
-                    console.log('Using selection position:', x, y);
-                } else {
-                    console.log('Selection rect empty, using center position');
-                }
-            } else {
-                console.log('No selection available, using center position');
-            }
-        } catch (e) {
-            console.warn('Could not get selection position:', e);
-        }
-
-        // Show loading tooltip
-        console.log('Creating loading tooltip');
-        const loadingTooltip = createSelectionTooltip(x, y, text, 'Translating...', true);
-
-        try {
-            console.log('Sending translation request to service worker');
-
-            const response = await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    reject(new Error('Translation request timeout'));
-                }, 15000);
-
-                chrome.runtime.sendMessage(
-                    {
-                        action: "getSelectionTranslation",
-                        text: text,
-                        targetLanguage: targetLanguage
-                    },
-                    (response) => {
-                        clearTimeout(timeout);
-                        if (chrome.runtime.lastError) {
-                            reject(new Error(chrome.runtime.lastError.message));
-                        } else {
-                            resolve(response);
-                        }
-                    }
-                );
-            });
-
-            console.log('Translation response received:', response);
-
-            // Remove loading tooltip
-            const loadingTooltipElement = document.getElementById('gemini-selection-tooltip');
-            if (loadingTooltipElement) {
-                loadingTooltipElement.remove();
-                console.log('Removed loading tooltip');
-            }
-
-            if (response && response.success) {
-                console.log('Creating success tooltip with translation:', response.translation.substring(0, 50));
-                createSelectionTooltip(x, y, text, response.translation, false);
-                showNotification('Selection translated successfully', 'success');
-            } else {
-                const errorMsg = response ? response.error : 'Unknown error';
-                console.log('Creating error tooltip:', errorMsg);
-                createSelectionTooltip(x, y, text, `❌ Translation failed: ${errorMsg}`, false);
-                showNotification(`Translation failed: ${errorMsg}`, 'error');
-            }
-        } catch (error) {
-            console.error('Selection translation failed:', error);
-
-            // Remove loading tooltip
-            const loadingTooltipElement = document.getElementById('gemini-selection-tooltip');
-            if (loadingTooltipElement) {
-                loadingTooltipElement.remove();
-                console.log('Removed loading tooltip after error');
-            }
-
-            console.log('Creating error tooltip for exception:', error.message);
-            createSelectionTooltip(x, y, text, `❌ Translation failed: ${error.message}`, false);
-            showNotification(`Translation failed: ${error.message}`, 'error');
-        }
-    }
 
     /**
      * Enhanced page translation with progress tracking
@@ -407,20 +192,31 @@ if (!window.isGeminiTranslatorInjected) {
      * Enhanced revert function
      */
     function doRevert() {
+        // Revert full page translations
         const translatedElements = document.querySelectorAll('.gemini-translated-text');
-        if (translatedElements.length === 0) {
-            showNotification('No translated text found to revert', 'info');
-            console.log('Gemini Translator: No translated text found to revert.');
-            return;
+        if (translatedElements.length > 0) {
+            translatedElements.forEach(span => {
+                const originalTextNode = document.createTextNode(span.dataset.originalText);
+                span.replaceWith(originalTextNode);
+            });
+            showNotification(`Reverted ${translatedElements.length} page translations`, 'success');
         }
 
-        translatedElements.forEach(span => {
-            const originalTextNode = document.createTextNode(span.dataset.originalText);
-            span.replaceWith(originalTextNode);
-        });
+        // Revert in-place selection translations
+        const selectionTranslations = document.querySelectorAll('.gemini-translated-selection');
+        if (selectionTranslations.length > 0) {
+            selectionTranslations.forEach(span => {
+                const originalTextNode = document.createTextNode(span.dataset.originalText);
+                span.replaceWith(originalTextNode);
+            });
+            showNotification(`Reverted ${selectionTranslations.length} selection translations`, 'success');
+        }
 
-        showNotification(`Reverted ${translatedElements.length} translations`, 'success');
-        console.log(`Gemini Translator: Reverted ${translatedElements.length} translated elements.`);
+
+        if (translatedElements.length === 0 && selectionTranslations.length === 0) {
+            showNotification('No translated text found to revert', 'info');
+            console.log('Gemini Translator: No translated text found to revert.');
+        }
     }
 
     /**
