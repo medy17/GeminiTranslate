@@ -52,6 +52,92 @@ async function ensureContentScript(tabId) {
     }
 }
 
+// --- Custom Select Logic ---
+
+function closeAllSelect() {
+    const allItemsDivs = document.querySelectorAll(".select-items");
+    const allSelectedDivs = document.querySelectorAll(".select-selected");
+
+    allItemsDivs.forEach(itemsDiv => itemsDiv.style.display = "none");
+    allSelectedDivs.forEach(selectedDiv => selectedDiv.classList.remove("select-arrow-active"));
+}
+
+function initializeCustomSelects() {
+    const wrappers = document.querySelectorAll(".custom-select-wrapper");
+
+    wrappers.forEach(wrapper => {
+        const selectEl = wrapper.querySelector("select");
+        if (!selectEl || wrapper.querySelector('.select-selected')) return; // Already initialized
+
+        // Create the main display element
+        const selectedDiv = document.createElement("div");
+        selectedDiv.className = "select-selected";
+        selectedDiv.innerHTML = selectEl.options[selectEl.selectedIndex].innerHTML;
+        wrapper.appendChild(selectedDiv);
+
+        // Create the options container
+        const itemsDiv = document.createElement("div");
+        itemsDiv.className = "select-items";
+
+        Array.from(selectEl.children).forEach(child => {
+            if (child.tagName.toLowerCase() === 'optgroup') {
+                const optgroupDiv = document.createElement("div");
+                optgroupDiv.className = "select-optgroup";
+                optgroupDiv.innerHTML = child.label;
+                itemsDiv.appendChild(optgroupDiv);
+
+                Array.from(child.children).forEach(option => createOptionDiv(option));
+            } else if (child.tagName.toLowerCase() === 'option') {
+                createOptionDiv(child);
+            }
+        });
+
+        wrapper.appendChild(itemsDiv);
+
+        function createOptionDiv(optionEl) {
+            const itemDiv = document.createElement("div");
+            itemDiv.className = "select-item";
+            itemDiv.innerHTML = optionEl.innerHTML;
+            itemDiv.setAttribute("data-value", optionEl.value);
+
+            if (optionEl.value === selectEl.value) {
+                itemDiv.classList.add("same-as-selected");
+            }
+
+            itemsDiv.appendChild(itemDiv);
+
+            itemDiv.addEventListener("click", function() {
+                for (let i = 0; i < selectEl.options.length; i++) {
+                    if (selectEl.options[i].value === this.getAttribute('data-value')) {
+                        selectEl.selectedIndex = i;
+                        break;
+                    }
+                }
+
+                selectedDiv.innerHTML = this.innerHTML;
+
+                const sameAsSelected = itemsDiv.querySelector(".same-as-selected");
+                if (sameAsSelected) {
+                    sameAsSelected.classList.remove("same-as-selected");
+                }
+                this.classList.add("same-as-selected");
+
+                closeAllSelect();
+            });
+        }
+
+        selectedDiv.addEventListener("click", function(e) {
+            e.stopPropagation();
+            if (!this.classList.contains("select-arrow-active")) {
+                closeAllSelect();
+            }
+            itemsDiv.style.display = itemsDiv.style.display === "block" ? "none" : "block";
+            this.classList.toggle("select-arrow-active");
+        });
+    });
+}
+
+
 // --- Event Listeners ---
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -76,6 +162,10 @@ document.addEventListener("DOMContentLoaded", () => {
         if (settings.autoTranslateSites) {
             autoSitesTextarea.value = settings.autoTranslateSites.join("\n");
         }
+
+        // Initialize the custom select AFTER loading the settings
+        initializeCustomSelects();
+
         showStatus("Settings loaded successfully", 2000);
     });
 });
@@ -152,3 +242,6 @@ clearCacheButton.addEventListener("click", () => {
         }
     });
 });
+
+// Close the custom select if the user clicks outside of it
+document.addEventListener("click", closeAllSelect);

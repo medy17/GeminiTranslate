@@ -5,6 +5,13 @@
     <style>
         @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;700&display=swap");
 
+        /* Consistent sizing across all controls */
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        /* Colour tokens unchanged */
+
         :root {
             --bg-color: #1a202c;
             --text-color: #e2e8f0;
@@ -64,20 +71,31 @@
         input,
         select,
         textarea {
-            width: 98%;
-            padding: 8px;
-            margin-top: 5px;
+            width: 100%;
+            display: block;
+            padding: 10px 12px;
+            margin-top: 6px;
             border: 1px solid var(--border-color);
-            border-radius: 4px;
+            border-radius: 8px;
             font-size: 14px;
             background-color: var(--input-bg);
             color: var(--text-color);
             font-family: "IBM Plex Sans", sans-serif;
+            outline: none;
+            transition: border-color 120ms ease, box-shadow 120ms ease;
         }
+        input:focus,
+        select:focus,
+        textarea:focus {
+            border-color: #5a7bb8;
+            box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.35);
+        }
+
         textarea {
             resize: vertical;
-            height: 60px;
+            min-height: 68px;
         }
+
         button {
             width: 100%;
             padding: 12px;
@@ -141,6 +159,81 @@
             margin-top: 3px;
             font-style: italic;
         }
+
+        /* --- Custom Select Styles --- */
+        .custom-select-wrapper {
+            position: relative;
+            margin-top: 6px;
+        }
+        .custom-select-wrapper select {
+            display: none; /* Hide the original select */
+        }
+        .select-selected {
+            background-color: var(--input-bg);
+            color: var(--text-color);
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            cursor: pointer;
+            user-select: none;
+            position: relative;
+            transition: border-color 120ms ease, box-shadow 120ms ease, border-radius 120ms ease;
+        }
+        .select-selected.select-arrow-active {
+            border-color: #5a7bb8;
+            box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.35);
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+        }
+        .select-selected::after {
+            content: "";
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            width: 16px; /* Increased size */
+            height: 16px; /* Increased size */
+            transform: translateY(-50%);
+            background: no-repeat center/16px 16px url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23a0aec0"><path d="M7 10l5 5 5-5"/></svg>'); /* Increased background size */
+            opacity: .9;
+            transition: transform 0.2s ease;
+        }
+        .select-arrow-active::after {
+            transform: translateY(-50%) rotate(180deg);
+        }
+        .select-items {
+            position: absolute;
+            background-color: var(--input-bg);
+            top: calc(100% - 1px); /* Overlap the border for a seamless look */
+            left: 0;
+            right: 0;
+            z-index: 99;
+            border: 1px solid var(--border-color);
+            border-radius: 0 0 8px 8px; /* Only round the bottom corners */
+            max-height: 200px;
+            overflow-y: auto;
+            display: none; /* Hidden by default */
+        }
+        /* Match the border color to the active select box */
+        .select-selected.select-arrow-active + .select-items {
+            border-color: #5a7bb8;
+        }
+        .select-optgroup {
+            padding: 8px 12px;
+            font-size: 11px;
+            font-weight: bold;
+            color: var(--hint-color);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .select-item {
+            color: var(--text-color);
+            padding: 10px 12px;
+            cursor: pointer;
+            user-select: none;
+        }
+        .select-item:hover, .same-as-selected {
+            background-color: var(--button-primary-bg);
+        }
     </style>
 </head>
 <body>
@@ -154,48 +247,55 @@
 <div class="hint">Get your API key from Google AI Studio</div>
 
 <label for="modelSelect">Gemini Model:</label>
-<select id="modelSelect">
-    <optgroup label="Gemini 2.5 Family (Latest)">
-        <option value="models/gemini-2.5-pro">Gemini 2.5 Pro</option>
-        <option value="models/gemini-2.5-flash">Gemini 2.5 Flash</option>
-    </optgroup>
-    <optgroup label="Gemma 3 Family (New)">
-        <option value="models/gemma-3-27b-it">Gemma 3 27B IT</option>
-        <option value="models/gemma-3-12b-it">Gemma 3 12B IT</option>
-    </optgroup>
-    <optgroup label="Gemma 2 Instruct">
-        <option value="models/gemma-2-9b-it">Gemma 2 9B IT</option>
-    </optgroup>
-</select>
+<div class="custom-select-wrapper">
+    <select id="modelSelect">
+        <optgroup label="Gemini 2.5 Family (Latest)">
+            <option value="models/gemini-2.5-pro">Gemini 2.5 Pro</option>
+            <option value="models/gemini-2.5-flash">Gemini 2.5 Flash</option>
+        </optgroup>
+        <optgroup label="Gemma 3 Family (New)">
+            <option value="models/gemma-3-27b-it">Gemma 3 27B IT</option>
+            <option value="models/gemma-3-12b-it">Gemma 3 12B IT</option>
+        </optgroup>
+        <optgroup label="Gemma 2 Instruct">
+            <option value="models/gemma-2-9b-it">Gemma 2 9B IT</option>
+        </optgroup>
+    </select>
+</div>
+
 
 <label for="sourceLanguageSelect">Source Language:</label>
-<select id="sourceLanguageSelect">
-    <option value="Auto-detect">Auto-detect</option>
-    <option value="Chinese">Chinese</option>
-    <option value="English">English</option>
-    <option value="Spanish">Spanish</option>
-    <option value="French">French</option>
-    <option value="German">German</option>
-    <option value="Japanese">Japanese</option>
-    <option value="Korean">Korean</option>
-    <option value="Portuguese">Portuguese</option>
-    <option value="Russian">Russian</option>
-    <option value="Italian">Italian</option>
-</select>
+<div class="custom-select-wrapper">
+    <select id="sourceLanguageSelect">
+        <option value="Auto-detect">Auto-detect</option>
+        <option value="Chinese">Chinese</option>
+        <option value="English">English</option>
+        <option value="Spanish">Spanish</option>
+        <option value="French">French</option>
+        <option value="German">German</option>
+        <option value="Japanese">Japanese</option>
+        <option value="Korean">Korean</option>
+        <option value="Portuguese">Portuguese</option>
+        <option value="Russian">Russian</option>
+        <option value="Italian">Italian</option>
+    </select>
+</div>
 
 <label for="targetLanguageSelect">Target Language:</label>
-<select id="targetLanguageSelect">
-    <option value="English">English</option>
-    <option value="Chinese">Chinese</option>
-    <option value="Spanish">Spanish</option>
-    <option value="French">French</option>
-    <option value="German">German</option>
-    <option value="Japanese">Japanese</option>
-    <option value="Korean">Korean</option>
-    <option value="Portuguese">Portuguese</option>
-    <option value="Russian">Russian</option>
-    <option value="Italian">Italian</option>
-</select>
+<div class="custom-select-wrapper">
+    <select id="targetLanguageSelect">
+        <option value="English">English</option>
+        <option value="Chinese">Chinese</option>
+        <option value="Spanish">Spanish</option>
+        <option value="French">French</option>
+        <option value="German">German</option>
+        <option value="Japanese">Japanese</option>
+        <option value="Korean">Korean</option>
+        <option value="Portuguese">Portuguese</option>
+        <option value="Russian">Russian</option>
+        <option value="Italian">Italian</option>
+    </select>
+</div>
 
 <label for="autoSites">Auto-translate sites (one per line):</label>
 <textarea
