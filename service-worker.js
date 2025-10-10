@@ -1,469 +1,321 @@
-// Translation cache to avoid redundant API calls
+/* eslint-disable no-console */
+
+// --- Caching & Rate Limiting ---
 const translationCache = new Map();
 const MAX_CACHE_SIZE = 1000;
-
-// Rate limiting
 let apiCallQueue = [];
 let isProcessingQueue = false;
 const MAX_CONCURRENT_CALLS = 3;
-const MIN_DELAY_BETWEEN_CALLS = 1000; // 1 second
+const MIN_DELAY_BETWEEN_CALLS = 1000; // ms
+const RESPONSE_SEPARATOR = "|||---|||";
+const API_BASES = [
+    "https://generativelanguage.googleapis.com/v1",
+    "https://generativelanguage.googleapis.com/v1beta",
+];
 
-// Token management
-const MAX_TOKENS_PER_REQUEST = 30000; // Conservative limit
-const CHARS_PER_TOKEN_ESTIMATE = 4; // Rough estimate for Chinese text
-
-// Context menu setup with better error handling
+// --- Context Menu Setup ---
 chrome.runtime.onInstalled.addListener(() => {
     try {
         chrome.contextMenus.removeAll(() => {
             chrome.contextMenus.create({
                 id: "translateSelection",
                 title: "Translate selected text with Gemini",
-                contexts: ["selection"]
-            }, () => {
-                if (chrome.runtime.lastError) {
-                    console.error('Context menu creation failed:', chrome.runtime.lastError);
-                } else {
-                    console.log('Context menu created successfully');
-                }
+                contexts: ["selection"],
             });
         });
     } catch (error) {
-        console.error('Failed to setup context menu:', error);
+        console.error("Failed to setup context menu:", error);
     }
 });
 
-// This function will be injected into the page to handle selection translation.
-function replaceAndTranslateSelection(targetLanguage) {
+// --- Injected Script for Context Menu Action ---
+function replaceAndTranslateSelection(sourceLanguage, targetLanguage) {
     const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-        return; // No active selection.
-    }
-
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
     const selectedText = selection.toString().trim();
-    if (!selectedText) {
-        return; // Selection is empty.
-    }
-
-    const CJK_REGEX = /[\u4e00-\u9fa5]/;
-    if (!CJK_REGEX.test(selectedText)) {
-        return; // No Chinese text detected.
-    }
+    if (!selectedText) return;
 
     const range = selection.getRangeAt(0);
-    const container = range.commonAncestorContainer;
-    const element = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+    const wrapper = document.createElement("span");
+    wrapper.className = "gemini-translated-selection";
+    wrapper.style.cssText = "font-style: italic; cursor: pointer;";
+    wrapper.textContent = "Translating...";
+    wrapper.dataset.originalText = selectedText;
+    range.deleteContents();
+    range.insertNode(wrapper);
 
-    const isInputOrTextarea = element.tagName === 'INPUT' || element.tagName === 'TEXTAREA';
-
-    // Handle translation for <input> and <textarea> fields
-    if (isInputOrTextarea && typeof element.selectionStart === 'number') {
-        const inputEl = element;
-        const start = inputEl.selectionStart;
-        const end = inputEl.selectionEnd;
-        const originalValue = inputEl.value;
-
-        inputEl.value = originalValue.substring(0, start) + "Translating..." + originalValue.substring(end);
-
-        chrome.runtime.sendMessage({
-            action: 'getSelectionTranslation',
+    chrome.runtime
+        .sendMessage({
+            action: "getSelectionTranslation",
             text: selectedText,
-            targetLanguage: targetLanguage
-        }).then(response => {
-            if (response && response.success) {
-                inputEl.value = originalValue.substring(0, start) + response.translation + originalValue.substring(end);
-            } else {
-                inputEl.value = originalValue; // Revert on failure
-                alert(`Translation failed: ${response?.error || 'Unknown error'}`);
-            }
-        }).catch(error => {
-            inputEl.value = originalValue; // Revert on failure
-            alert(`Translation request failed: ${error.message}`);
-        });
-    } else {
-        // Handle translation for regular DOM nodes (p, div, span, etc.)
-        const wrapper = document.createElement('span');
-        wrapper.className = 'gemini-translated-selection';
-        wrapper.style.cssText = "background-color: #FFFFE0; cursor: wait; font-style: italic;";
-        wrapper.textContent = "Translating...";
-        wrapper.dataset.originalText = selectedText;
-
-        range.deleteContents();
-        range.insertNode(wrapper);
-
-        chrome.runtime.sendMessage({
-            action: 'getSelectionTranslation',
-            text: selectedText,
-            targetLanguage: targetLanguage
-        }).then(response => {
-            wrapper.style.cursor = 'help';
-            wrapper.style.fontStyle = 'normal';
+            sourceLanguage: sourceLanguage,
+            targetLanguage: targetLanguage,
+        })
+        .then((response) => {
+            wrapper.style.fontStyle = "normal";
             if (response && response.success) {
                 const translatedText = response.translation;
                 wrapper.textContent = translatedText;
-                wrapper.title = `Original: ${selectedText}`;
+                wrapper.title = `Original: "${selectedText}" (Click to revert)`;
 
-                wrapper.addEventListener('click', function(e) {
+                wrapper.addEventListener("click", function (e) {
                     e.preventDefault();
                     e.stopPropagation();
                     const isShowingTranslation = this.textContent === translatedText;
-                    this.textContent = isShowingTranslation ? this.dataset.originalText : translatedText;
-                    this.style.backgroundColor = isShowingTranslation ? '#FFE0E6' : '#FFFFE0';
+                    if (isShowingTranslation) {
+                        this.textContent = this.dataset.originalText;
+                        this.title = `Translated: "${translatedText}" (Click to show translation)`;
+                    } else {
+                        this.textContent = translatedText;
+                        this.title = `Original: "${this.dataset.originalText}" (Click to revert)`;
+                    }
                 });
             } else {
-                wrapper.textContent = selectedText; // Revert to original text
-                wrapper.style.backgroundColor = '#FFDDDD'; // Error indication
-                wrapper.title = `Translation failed: ${response?.error || 'Unknown error'}`;
+                wrapper.textContent = selectedText; // Revert
+                wrapper.title = `Failed: ${response?.error || "Unknown"}`;
+                wrapper.style.cursor = "default";
             }
-        }).catch(error => {
-            wrapper.textContent = selectedText; // Revert on error
-            wrapper.style.backgroundColor = '#FFDDDD';
-            wrapper.title = `Translation request failed: ${error.message}`;
         });
-    }
 }
 
-// Handle context menu clicks by injecting and executing the replacement script
+// --- Event Listeners ---
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "translateSelection" && info.selectionText) {
         try {
-            await ensureContentScript(tab.id); // Ensure content script is available
-            const targetLanguage = await getTargetLanguage();
-
+            await ensureContentScript(tab.id);
+            const { sourceLanguage, targetLanguage } = await getTranslationLanguages();
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 func: replaceAndTranslateSelection,
-                args: [targetLanguage]
+                args: [sourceLanguage, targetLanguage],
             });
         } catch (error) {
-            console.error('Context menu script execution failed:', error);
-            try {
-                await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
-                    func: (msg) => alert(`Translation failed: ${msg}`),
-                    args: [error.message]
-                });
-            } catch (alertError) {
-                console.error('Failed to show error alert:', alertError);
-            }
+            console.error("Context menu script execution failed:", error);
         }
     }
 });
 
-
-// Helper function to send messages with timeout
-function sendMessageWithTimeout(tabId, message, timeout = 5000) {
-    return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-            reject(new Error('Message timeout'));
-        }, timeout);
-
-        chrome.tabs.sendMessage(tabId, message, (response) => {
-            clearTimeout(timer);
-            if (chrome.runtime.lastError) {
-                reject(new Error(chrome.runtime.lastError.message));
-            } else {
-                resolve(response);
-            }
-        });
-    });
-}
-
-async function ensureContentScript(tabId) {
-    try {
-        console.log('Checking if content script is injected for tab:', tabId);
-
-        // First, try to ping the content script
-        try {
-            const response = await sendMessageWithTimeout(tabId, { action: 'ping' }, 1000);
-            if (response && response.pong) {
-                console.log('Content script already active');
-                return;
-            }
-        } catch (error) {
-            console.log('Content script not responding, injecting...');
-        }
-
-        // Inject the content script
-        await chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            files: ['content.js'],
-        });
-
-        console.log('Content script injected successfully');
-
-        // Wait a moment for the script to initialize
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-    } catch (error) {
-        console.error('Failed to inject content script:', error);
-        throw new Error('Cannot inject content script on this page');
-    }
-}
-
-async function getTargetLanguage() {
-    try {
-        const { targetLanguage } = await chrome.storage.sync.get(['targetLanguage']);
-        return targetLanguage || 'English';
-    } catch (error) {
-        console.error('Failed to get target language:', error);
-        return 'English';
-    }
-}
-
-// Enhanced message listener with better error handling
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    console.log('Service worker received message:', request.action);
-
     if (request.action === "getTranslation") {
         handleTranslationRequest(request, sendResponse);
-        return true; // Indicates async response
-    } else if (request.action === "getSelectionTranslation") {
-        handleSelectionTranslation(request, sendResponse);
-        return true;
-    } else if (request.action === "clearCache") {
+        return true; // async
+    }
+    if (request.action === "getSelectionTranslation") {
+        handleTranslationRequest({ ...request, isSelection: true }, sendResponse);
+        return true; // async
+    }
+    if (request.action === "clearCache") {
         translationCache.clear();
-        console.log('Translation cache cleared');
         sendResponse({ success: true });
-        return false;
     }
 });
 
+// --- Core Translation Logic ---
 async function handleTranslationRequest(request, sendResponse) {
     try {
-        const { text, targetLanguage, isSelection = false } = request;
-        console.log('Handling translation request, isSelection:', isSelection, 'textLength:', text.length);
+        const { text, sourceLanguage, targetLanguage, isSelection = false } =
+            request;
+        const cacheKey = `${sourceLanguage}:${targetLanguage}:${text.substring(
+            0,
+            100
+        )}`;
 
-        // Check cache first
-        const cacheKey = `${text.substring(0, 100)}:${targetLanguage}`;
         if (translationCache.has(cacheKey)) {
-            console.log('Using cached translation');
             sendResponse({
                 success: true,
                 translation: translationCache.get(cacheKey),
-                fromCache: true
+                fromCache: true,
             });
             return;
         }
 
-        // For page translation, chunk the text; for selection, translate directly
-        let translation;
-        if (isSelection || estimateTokenCount(text) <= MAX_TOKENS_PER_REQUEST) {
-            translation = await queueApiCall(text, targetLanguage);
-        } else {
-            translation = await translateInChunks(text, targetLanguage);
-        }
-
-        // Cache the result
+        const translation = await queueApiCall(text, sourceLanguage, targetLanguage);
         cacheTranslation(cacheKey, translation);
-
-        sendResponse({ success: true, translation: translation });
+        sendResponse({ success: true, translation });
     } catch (error) {
         console.error("Translation failed:", error);
         sendResponse({ success: false, error: error.message });
     }
 }
 
-async function handleSelectionTranslation(request, sendResponse) {
-    console.log('Handling selection translation:', request.text.substring(0, 50));
-    // Handle selection translation with the same logic but mark as selection
-    await handleTranslationRequest({
-        ...request,
-        isSelection: true
-    }, sendResponse);
-}
-
-function estimateTokenCount(text) {
-    return Math.ceil(text.length / CHARS_PER_TOKEN_ESTIMATE);
-}
-
-async function translateInChunks(text, targetLanguage) {
-    const separator = "|||---|||";
-    const chunks = text.split(separator);
-    const translatedChunks = [];
-
-    // Group small chunks together to optimize API usage
-    const optimizedChunks = [];
-    let currentChunk = "";
-
-    for (const chunk of chunks) {
-        const potentialChunk = currentChunk + (currentChunk ? separator : "") + chunk;
-
-        if (estimateTokenCount(potentialChunk) <= MAX_TOKENS_PER_REQUEST) {
-            currentChunk = potentialChunk;
-        } else {
-            if (currentChunk) {
-                optimizedChunks.push(currentChunk);
-            }
-            currentChunk = chunk;
-        }
-    }
-
-    if (currentChunk) {
-        optimizedChunks.push(currentChunk);
-    }
-
-    // Translate each optimized chunk
-    for (const chunk of optimizedChunks) {
-        try {
-            const translation = await queueApiCall(chunk, targetLanguage);
-            translatedChunks.push(translation);
-        } catch (error) {
-            console.error(`Failed to translate chunk:`, error);
-            // On failure, return original chunk
-            translatedChunks.push(chunk);
-        }
-    }
-
-    return translatedChunks.join(separator);
-}
-
-async function queueApiCall(text, targetLanguage) {
+async function queueApiCall(text, sourceLanguage, targetLanguage) {
     return new Promise((resolve, reject) => {
-        apiCallQueue.push({ text, targetLanguage, resolve, reject });
+        apiCallQueue.push({ text, sourceLanguage, targetLanguage, resolve, reject });
         processApiQueue();
     });
 }
 
 async function processApiQueue() {
-    if (isProcessingQueue || apiCallQueue.length === 0) {
-        return;
-    }
-
+    if (isProcessingQueue || apiCallQueue.length === 0) return;
     isProcessingQueue = true;
-
-    const concurrentCalls = Math.min(MAX_CONCURRENT_CALLS, apiCallQueue.length);
-    const currentBatch = apiCallQueue.splice(0, concurrentCalls);
-
-    const promises = currentBatch.map(async (call, index) => {
-        // Stagger the calls to avoid hitting rate limits
-        if (index > 0) {
-            await delay(MIN_DELAY_BETWEEN_CALLS * index);
-        }
-
-        try {
-            const result = await callGeminiApiWithRetry(call.text, call.targetLanguage);
-            call.resolve(result);
-        } catch (error) {
-            call.reject(error);
-        }
-    });
-
-    await Promise.all(promises);
-
+    const batch = apiCallQueue.splice(
+        0,
+        Math.min(MAX_CONCURRENT_CALLS, apiCallQueue.length)
+    );
+    await Promise.all(
+        batch.map((call) =>
+            callGeminiApi(call.text, call.sourceLanguage, call.targetLanguage)
+                .then(call.resolve)
+                .catch(call.reject)
+        )
+    );
     isProcessingQueue = false;
-
-    // Process remaining queue
-    if (apiCallQueue.length > 0) {
+    if (apiCallQueue.length > 0)
         setTimeout(processApiQueue, MIN_DELAY_BETWEEN_CALLS);
-    }
 }
 
-async function callGeminiApiWithRetry(text, targetLanguage, maxRetries = 3) {
-    let lastError;
+// --- Gemini API Call ---
+function buildTranslatePrompt(text, sourceLanguage, targetLanguage) {
+    const sourceInstruction =
+        sourceLanguage === "Auto-detect"
+            ? "Detect the language of the following text and translate it"
+            : `Translate the following ${sourceLanguage} text`;
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            return await callGeminiApi(text, targetLanguage);
-        } catch (error) {
-            lastError = error;
-            console.warn(`Translation attempt ${attempt} failed:`, error.message);
+    const sys = [
+        "You are a professional, direct translator.",
+        `Task: ${sourceInstruction} to ${targetLanguage}.`,
+        "Return ONLY the translated text for each input segment.",
+        `Segments are delimited by: ${RESPONSE_SEPARATOR}`,
+        "Preserve the exact number of segments and all original line breaks.",
+        "Do not add explanations, notes, quotes, or markdown.",
+    ].join(" ");
 
-            // Don't retry on certain errors
-            if (error.message.includes('API Key') || error.message.includes('blocked')) {
-                throw error;
-            }
-
-            // Exponential backoff
-            if (attempt < maxRetries) {
-                await delay(Math.pow(2, attempt) * 1000);
-            }
-        }
-    }
-
-    throw lastError;
+    const user = `Input:\n\n${text}`;
+    return { systemInstruction: sys, userMessage: user };
 }
 
-async function callGeminiApi(textToTranslate, targetLanguage) {
-    const { geminiApiKey, selectedModel } = await chrome.storage.sync.get(['geminiApiKey', 'selectedModel']);
+function extractTextFromModelResponse(data) {
+    const cands = data?.candidates || [];
+    if (cands.length === 0) throw new Error("No candidates returned.");
+    const cand =
+        cands.find((c) => c.finishReason !== "SAFETY") || cands[0];
+    if (cand.finishReason === "SAFETY") throw new Error("Blocked by safety.");
 
-    if (!geminiApiKey) {
-        throw new Error("API Key not found. Please set it in the extension popup.");
-    }
+    const parts = cand?.content?.parts;
+    if (!parts) throw new Error("Invalid response structure.");
+    return parts.map((p) => p.text).join("").trim();
+}
 
-    const modelApiName = (selectedModel || 'gemini-1.5-flash-latest').replace('models/', '');
-    const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${modelApiName}:generateContent?key=${geminiApiKey}`;
+async function callGeminiApi(text, sourceLanguage, targetLanguage) {
+    const { geminiApiKey, selectedModel } = await chrome.storage.sync.get([
+        "geminiApiKey",
+        "selectedModel",
+    ]);
+    if (!geminiApiKey)
+        throw new Error("API Key not found. Please set it in the popup.");
 
-    const requestBody = {
-        contents: [{
-            parts: [{
-                text: `Translate the following Chinese text to ${targetLanguage}. Return ONLY the translated text. Preserve formatting and line breaks. Text:\n\n${textToTranslate}`
-            }]
-        }],
-        generationConfig: {
-            temperature: 0.1, // Lower temperature for more consistent translations
-            maxOutputTokens: Math.min(8192, estimateTokenCount(textToTranslate) * 2) // Reasonable limit
-        }
+    const modelId = selectedModel || "models/gemini-2.5-flash";
+    const modelApiName = modelId.replace("models/", "");
+
+    const { systemInstruction, userMessage } = buildTranslatePrompt(
+        text,
+        sourceLanguage,
+        targetLanguage
+    );
+
+    const generationConfig = {
+        temperature: 0.1,
+        responseMimeType: "text/plain",
     };
 
-    const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-    });
+    // CORRECTED: Build the request body based on the model family.
+    let requestBody;
+    const isGemmaModel = modelId.includes("gemma");
 
-    if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`API Error: ${response.status} - ${errorData.error?.message || 'Unknown error'}`);
+    if (isGemmaModel) {
+        // For Gemma, combine system and user prompts into a single user message.
+        const combinedPrompt = `${systemInstruction}\n\n${userMessage}`;
+        requestBody = {
+            contents: [{ role: "user", parts: [{ text: combinedPrompt }] }],
+            generationConfig,
+        };
+    } else {
+        // For Gemini, use the dedicated systemInstruction field.
+        requestBody = {
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            contents: [{ role: "user", parts: [{ text: userMessage }] }],
+            generationConfig,
+        };
     }
 
-    const data = await response.json();
-
-    if (data.promptFeedback && data.promptFeedback.blockReason) {
-        throw new Error(`Translation blocked: ${data.promptFeedback.blockReason}`);
+    let lastErr;
+    for (const base of API_BASES) {
+        const url = `${base}/models/${modelApiName}:generateContent?key=${geminiApiKey}`;
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(requestBody),
+            });
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => null);
+                throw new Error(
+                    `API Error: ${response.status} - ${
+                        errorData?.error?.message || "Unknown"
+                    }`
+                );
+            }
+            const data = await response.json();
+            return extractTextFromModelResponse(data);
+        } catch (e) {
+            lastErr = e;
+        }
     }
-
-    const translation = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!translation) {
-        console.error("Gemini API Raw Response:", JSON.stringify(data, null, 2));
-        throw new Error("Could not extract translation from API response.");
-    }
-
-    return translation.trim();
+    throw lastErr || new Error("Failed to reach Gemini API.");
 }
 
+// --- Utility Functions ---
 function cacheTranslation(key, translation) {
     if (translationCache.size >= MAX_CACHE_SIZE) {
-        // Remove oldest entries
         const firstKey = translationCache.keys().next().value;
         translationCache.delete(firstKey);
     }
     translationCache.set(key, translation);
 }
 
-function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+async function getTranslationLanguages() {
+    const settings = await chrome.storage.sync.get([
+        "sourceLanguage",
+        "targetLanguage",
+    ]);
+    return {
+        sourceLanguage: settings.sourceLanguage || "Auto-detect",
+        targetLanguage: settings.targetLanguage || "English",
+    };
 }
 
-// Auto-translate feature (enhanced with rate limiting)
+async function ensureContentScript(tabId) {
+    const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => window.isGeminiTranslatorInjected,
+    });
+    if (!results || !results[0]?.result) {
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            files: ["content.js"],
+        });
+    }
+}
+
+// Auto-translate on navigation
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'complete' && tab.url) {
-        const { autoTranslateSites, targetLanguage } = await chrome.storage.sync.get(['autoTranslateSites', 'targetLanguage']);
-
-        if (autoTranslateSites && autoTranslateSites.length > 0) {
-            const shouldTranslate = autoTranslateSites.some(site => tab.url.includes(site));
-
-            if (shouldTranslate) {
-                // Add delay to avoid overwhelming the API on multiple tab loads
-                await delay(2000);
-
-                await ensureContentScript(tabId);
-                chrome.tabs.sendMessage(tabId, {
-                    action: 'translate',
-                    targetLanguage: targetLanguage || 'English'
-                });
-            }
+    if (changeInfo.status === "complete" && tab.url) {
+        const { autoTranslateSites, sourceLanguage, targetLanguage } =
+            await chrome.storage.sync.get([
+                "autoTranslateSites",
+                "sourceLanguage",
+                "targetLanguage",
+            ]);
+        if (
+            autoTranslateSites?.length > 0 &&
+            autoTranslateSites.some((site) => tab.url.includes(site))
+        ) {
+            await ensureContentScript(tabId);
+            chrome.tabs.sendMessage(tabId, {
+                action: "translate",
+                sourceLanguage: sourceLanguage || "Auto-detect",
+                targetLanguage: targetLanguage || "English",
+            });
         }
     }
 });

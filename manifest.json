@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Gemini Page Translator Pro",
-  "version": "2.1",
-  "description": "Detects Chinese, translates to a language of your choice using a selected Gemini model with enhanced efficiency and right-click support.",
+  "version": "2.2",
+  "description": "Translate web pages from any selected language to another using Gemini, with a dark mode UI and right-click support.",
   "permissions": [
     "storage",
     "activeTab",
@@ -23,10 +23,5 @@
   },
   "background": {
     "service_worker": "service-worker.js"
-  },
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
   }
 }
