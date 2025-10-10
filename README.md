@@ -1,0 +1,2 @@
+As of 7th October, Google has deprecated API support for Gemini 1.5 models. For the time being, the extension is broken with those models. Working supporting newer models including Gemma. 
+ETA: ~ 11 October
