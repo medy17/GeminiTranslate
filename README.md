@@ -38,10 +38,8 @@
     - [Prerequisites](#prerequisites)
     - [Installation](#installation)
 - [ Roadmap](#️-roadmap)
-- [ Contributing](#-contributing)
 - [ License](#-license)
 - [ Contact](#-contact)
-- [ Acknowledgements](#-acknowledgements)
 
 ---
 
@@ -63,7 +61,7 @@ Unlike traditional translation services, this extension leverages advanced gener
 
 ###  Screenshots
 
-|               Main Interface (Light)                |
+|               Main Interface                |
 |:---------------------------------------------------:| 
 | <img height="300px" src="readme-assets/popup.png"/> |
 
