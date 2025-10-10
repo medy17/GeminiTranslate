@@ -1,5 +1,6 @@
 // --- Element References ---
 const apiKeyInput = document.getElementById("apiKey");
+const grokApiKeyInput = document.getElementById("grokApiKey");
 const modelSelect = document.getElementById("modelSelect");
 const sourceLanguageSelect = document.getElementById("sourceLanguageSelect");
 const targetLanguageSelect = document.getElementById("targetLanguageSelect");
@@ -58,36 +59,41 @@ function closeAllSelect() {
     const allItemsDivs = document.querySelectorAll(".select-items");
     const allSelectedDivs = document.querySelectorAll(".select-selected");
 
-    allItemsDivs.forEach(itemsDiv => itemsDiv.style.display = "none");
-    allSelectedDivs.forEach(selectedDiv => selectedDiv.classList.remove("select-arrow-active"));
+    allItemsDivs.forEach((itemsDiv) => (itemsDiv.style.display = "none"));
+    allSelectedDivs.forEach((selectedDiv) =>
+        selectedDiv.classList.remove("select-arrow-active")
+    );
 }
 
 function initializeCustomSelects() {
     const wrappers = document.querySelectorAll(".custom-select-wrapper");
 
-    wrappers.forEach(wrapper => {
+    wrappers.forEach((wrapper) => {
         const selectEl = wrapper.querySelector("select");
-        if (!selectEl || wrapper.querySelector('.select-selected')) return; // Already initialized
+        if (!selectEl || wrapper.querySelector(".select-selected")) return; // Already initialized
 
         // Create the main display element
         const selectedDiv = document.createElement("div");
         selectedDiv.className = "select-selected";
-        selectedDiv.innerHTML = selectEl.options[selectEl.selectedIndex].innerHTML;
+        selectedDiv.innerHTML =
+            selectEl.options[selectEl.selectedIndex].innerHTML;
         wrapper.appendChild(selectedDiv);
 
         // Create the options container
         const itemsDiv = document.createElement("div");
         itemsDiv.className = "select-items";
 
-        Array.from(selectEl.children).forEach(child => {
-            if (child.tagName.toLowerCase() === 'optgroup') {
+        Array.from(selectEl.children).forEach((child) => {
+            if (child.tagName.toLowerCase() === "optgroup") {
                 const optgroupDiv = document.createElement("div");
                 optgroupDiv.className = "select-optgroup";
                 optgroupDiv.innerHTML = child.label;
                 itemsDiv.appendChild(optgroupDiv);
 
-                Array.from(child.children).forEach(option => createOptionDiv(option));
-            } else if (child.tagName.toLowerCase() === 'option') {
+                Array.from(child.children).forEach((option) =>
+                    createOptionDiv(option)
+                );
+            } else if (child.tagName.toLowerCase() === "option") {
                 createOptionDiv(child);
             }
         });
@@ -106,9 +112,12 @@ function initializeCustomSelects() {
 
             itemsDiv.appendChild(itemDiv);
 
-            itemDiv.addEventListener("click", function() {
+            itemDiv.addEventListener("click", function () {
                 for (let i = 0; i < selectEl.options.length; i++) {
-                    if (selectEl.options[i].value === this.getAttribute('data-value')) {
+                    if (
+                        selectEl.options[i].value ===
+                        this.getAttribute("data-value")
+                    ) {
                         selectEl.selectedIndex = i;
                         break;
                     }
@@ -116,7 +125,8 @@ function initializeCustomSelects() {
 
                 selectedDiv.innerHTML = this.innerHTML;
 
-                const sameAsSelected = itemsDiv.querySelector(".same-as-selected");
+                const sameAsSelected =
+                    itemsDiv.querySelector(".same-as-selected");
                 if (sameAsSelected) {
                     sameAsSelected.classList.remove("same-as-selected");
                 }
@@ -126,23 +136,24 @@ function initializeCustomSelects() {
             });
         }
 
-        selectedDiv.addEventListener("click", function(e) {
+        selectedDiv.addEventListener("click", function (e) {
             e.stopPropagation();
             if (!this.classList.contains("select-arrow-active")) {
                 closeAllSelect();
             }
-            itemsDiv.style.display = itemsDiv.style.display === "block" ? "none" : "block";
+            itemsDiv.style.display =
+                itemsDiv.style.display === "block" ? "none" : "block";
             this.classList.toggle("select-arrow-active");
         });
     });
 }
-
 
 // --- Event Listeners ---
 
 document.addEventListener("DOMContentLoaded", () => {
     const keysToGet = [
         "geminiApiKey",
+        "grokApiKey",
         "selectedModel",
         "sourceLanguage",
         "targetLanguage",
@@ -154,6 +165,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
         if (settings.geminiApiKey) apiKeyInput.value = settings.geminiApiKey;
+        if (settings.grokApiKey) grokApiKeyInput.value = settings.grokApiKey;
         if (settings.selectedModel) modelSelect.value = settings.selectedModel;
         if (settings.sourceLanguage)
             sourceLanguageSelect.value = settings.sourceLanguage;
@@ -171,13 +183,9 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 saveSettingsButton.addEventListener("click", () => {
-    if (!apiKeyInput.value.trim()) {
-        showStatus("API Key is required", 3000, true);
-        return;
-    }
-
     const settings = {
         geminiApiKey: apiKeyInput.value.trim(),
+        grokApiKey: grokApiKeyInput.value.trim(),
         selectedModel: modelSelect.value,
         sourceLanguage: sourceLanguageSelect.value,
         targetLanguage: targetLanguageSelect.value,

@@ -6,7 +6,9 @@
         @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;700&display=swap");
 
         /* Consistent sizing across all controls */
-        *, *::before, *::after {
+        *,
+        *::before,
+        *::after {
             box-sizing: border-box;
         }
 
@@ -177,7 +179,8 @@
             cursor: pointer;
             user-select: none;
             position: relative;
-            transition: border-color 120ms ease, box-shadow 120ms ease, border-radius 120ms ease;
+            transition: border-color 120ms ease, box-shadow 120ms ease,
+            border-radius 120ms ease;
         }
         .select-selected.select-arrow-active {
             border-color: #5a7bb8;
@@ -193,8 +196,9 @@
             width: 16px; /* Increased size */
             height: 16px; /* Increased size */
             transform: translateY(-50%);
-            background: no-repeat center/16px 16px url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23a0aec0"><path d="M7 10l5 5 5-5"/></svg>'); /* Increased background size */
-            opacity: .9;
+            background: no-repeat center/16px 16px
+            url("data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23a0aec0"><path d="M7 10l5 5 5-5"/></svg>"); /* Increased background size */
+            opacity: 0.9;
             transition: transform 0.2s ease;
         }
         .select-arrow-active::after {
@@ -203,7 +207,9 @@
         .select-items {
             position: absolute;
             background-color: var(--input-bg);
-            top: calc(100% - 1px); /* Overlap the border for a seamless look */
+            top: calc(
+                    100% - 1px
+            ); /* Overlap the border for a seamless look */
             left: 0;
             right: 0;
             z-index: 99;
@@ -231,7 +237,8 @@
             cursor: pointer;
             user-select: none;
         }
-        .select-item:hover, .same-as-selected {
+        .select-item:hover,
+        .same-as-selected {
             background-color: var(--button-primary-bg);
         }
     </style>
@@ -243,12 +250,27 @@
 </h3>
 
 <label for="apiKey">Gemini API Key:</label>
-<input type="password" id="apiKey" placeholder="Your API key" />
+<input type="password" id="apiKey" placeholder="Your Gemini API key" />
 <div class="hint">Get your API key from Google AI Studio</div>
 
-<label for="modelSelect">Gemini Model:</label>
+<label for="grokApiKey">Grok API Key:</label>
+<input
+        type="password"
+        id="grokApiKey"
+        placeholder="Your Grok (xAI) API key"
+/>
+<div class="hint">Get your API key from your xAI account</div>
+
+<label for="modelSelect">Model:</label>
 <div class="custom-select-wrapper">
     <select id="modelSelect">
+        <optgroup label="xAI Models">
+            <option value="grok-4">Grok 4 (Reasoning)</option>
+            <option value="grok-4-fast">Grok 4 Fast (Reasoning)</option>
+            <option value="grok-4-fast-non-reasoning">
+                Grok 4 Fast (Non-Reasoning)
+            </option>
+        </optgroup>
         <optgroup label="Gemini 2.5 Family (Latest)">
             <option value="models/gemini-2.5-pro">Gemini 2.5 Pro</option>
             <option value="models/gemini-2.5-flash">Gemini 2.5 Flash</option>
@@ -262,7 +284,6 @@
         </optgroup>
     </select>
 </div>
-
 
 <label for="sourceLanguageSelect">Source Language:</label>
 <div class="custom-select-wrapper">

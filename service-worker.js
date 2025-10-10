@@ -8,10 +8,13 @@ let isProcessingQueue = false;
 const MAX_CONCURRENT_CALLS = 3;
 const MIN_DELAY_BETWEEN_CALLS = 1000; // ms
 const RESPONSE_SEPARATOR = "|||---|||";
-const API_BASES = [
+
+// --- API Endpoints ---
+const GEMINI_API_BASES = [
     "https://generativelanguage.googleapis.com/v1",
     "https://generativelanguage.googleapis.com/v1beta",
 ];
+const XAI_API_BASE = "https://api.x.ai/v1";
 
 // --- Context Menu Setup ---
 chrome.runtime.onInstalled.addListener(() => {
@@ -19,7 +22,7 @@ chrome.runtime.onInstalled.addListener(() => {
         chrome.contextMenus.removeAll(() => {
             chrome.contextMenus.create({
                 id: "translateSelection",
-                title: "Translate selected text with Gemini",
+                title: "Translate selected text",
                 contexts: ["selection"],
             });
         });
@@ -61,7 +64,8 @@ function replaceAndTranslateSelection(sourceLanguage, targetLanguage) {
                 wrapper.addEventListener("click", function (e) {
                     e.preventDefault();
                     e.stopPropagation();
-                    const isShowingTranslation = this.textContent === translatedText;
+                    const isShowingTranslation =
+                        this.textContent === translatedText;
                     if (isShowingTranslation) {
                         this.textContent = this.dataset.originalText;
                         this.title = `Translated: "${translatedText}" (Click to show translation)`;
@@ -83,7 +87,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "translateSelection" && info.selectionText) {
         try {
             await ensureContentScript(tab.id);
-            const { sourceLanguage, targetLanguage } = await getTranslationLanguages();
+            const { sourceLanguage, targetLanguage } =
+                await getTranslationLanguages();
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 func: replaceAndTranslateSelection,
@@ -101,7 +106,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true; // async
     }
     if (request.action === "getSelectionTranslation") {
-        handleTranslationRequest({ ...request, isSelection: true }, sendResponse);
+        handleTranslationRequest(
+            { ...request, isSelection: true },
+            sendResponse
+        );
         return true; // async
     }
     if (request.action === "clearCache") {
@@ -113,8 +121,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // --- Core Translation Logic ---
 async function handleTranslationRequest(request, sendResponse) {
     try {
-        const { text, sourceLanguage, targetLanguage, isSelection = false } =
-            request;
+        const { text, sourceLanguage, targetLanguage } = request;
         const cacheKey = `${sourceLanguage}:${targetLanguage}:${text.substring(
             0,
             100
@@ -129,7 +136,11 @@ async function handleTranslationRequest(request, sendResponse) {
             return;
         }
 
-        const translation = await queueApiCall(text, sourceLanguage, targetLanguage);
+        const translation = await queueApiCall(
+            text,
+            sourceLanguage,
+            targetLanguage
+        );
         cacheTranslation(cacheKey, translation);
         sendResponse({ success: true, translation });
     } catch (error) {
@@ -140,7 +151,13 @@ async function handleTranslationRequest(request, sendResponse) {
 
 async function queueApiCall(text, sourceLanguage, targetLanguage) {
     return new Promise((resolve, reject) => {
-        apiCallQueue.push({ text, sourceLanguage, targetLanguage, resolve, reject });
+        apiCallQueue.push({
+            text,
+            sourceLanguage,
+            targetLanguage,
+            resolve,
+            reject,
+        });
         processApiQueue();
     });
 }
@@ -154,7 +171,7 @@ async function processApiQueue() {
     );
     await Promise.all(
         batch.map((call) =>
-            callGeminiApi(call.text, call.sourceLanguage, call.targetLanguage)
+            makeApiCall(call.text, call.sourceLanguage, call.targetLanguage)
                 .then(call.resolve)
                 .catch(call.reject)
         )
@@ -164,14 +181,25 @@ async function processApiQueue() {
         setTimeout(processApiQueue, MIN_DELAY_BETWEEN_CALLS);
 }
 
-// --- Gemini API Call ---
-function buildTranslatePrompt(text, sourceLanguage, targetLanguage) {
+async function makeApiCall(text, sourceLanguage, targetLanguage) {
+    const { selectedModel } = await chrome.storage.sync.get("selectedModel");
+    const modelId = selectedModel || "models/gemini-2.5-flash"; // Default
+
+    if (modelId.startsWith("grok-")) {
+        return callGrokApi(modelId, text, sourceLanguage, targetLanguage);
+    } else {
+        return callGeminiApi(modelId, text, sourceLanguage, targetLanguage);
+    }
+}
+
+// --- Universal Prompt Logic ---
+function getTranslationInstructions(sourceLanguage, targetLanguage) {
     const sourceInstruction =
         sourceLanguage === "Auto-detect"
             ? "Detect the language of the following text and translate it"
             : `Translate the following ${sourceLanguage} text`;
 
-    const sys = [
+    return [
         "You are a professional, direct translator.",
         `Task: ${sourceInstruction} to ${targetLanguage}.`,
         "Return ONLY the translated text for each input segment.",
@@ -179,58 +207,88 @@ function buildTranslatePrompt(text, sourceLanguage, targetLanguage) {
         "Preserve the exact number of segments and all original line breaks.",
         "Do not add explanations, notes, quotes, or markdown.",
     ].join(" ");
-
-    const user = `Input:\n\n${text}`;
-    return { systemInstruction: sys, userMessage: user };
 }
 
-function extractTextFromModelResponse(data) {
-    const cands = data?.candidates || [];
-    if (cands.length === 0) throw new Error("No candidates returned.");
-    const cand =
-        cands.find((c) => c.finishReason !== "SAFETY") || cands[0];
-    if (cand.finishReason === "SAFETY") throw new Error("Blocked by safety.");
+// --- Grok API Call ---
+async function callGrokApi(modelId, text, sourceLanguage, targetLanguage) {
+    const { grokApiKey } = await chrome.storage.sync.get("grokApiKey");
+    if (!grokApiKey) {
+        throw new Error("Grok API Key not found. Please set it in the popup.");
+    }
 
-    const parts = cand?.content?.parts;
-    if (!parts) throw new Error("Invalid response structure.");
-    return parts.map((p) => p.text).join("").trim();
-}
-
-async function callGeminiApi(text, sourceLanguage, targetLanguage) {
-    const { geminiApiKey, selectedModel } = await chrome.storage.sync.get([
-        "geminiApiKey",
-        "selectedModel",
-    ]);
-    if (!geminiApiKey)
-        throw new Error("API Key not found. Please set it in the popup.");
-
-    const modelId = selectedModel || "models/gemini-2.5-flash";
-    const modelApiName = modelId.replace("models/", "");
-
-    const { systemInstruction, userMessage } = buildTranslatePrompt(
-        text,
+    const systemContent = getTranslationInstructions(
         sourceLanguage,
         targetLanguage
     );
+    const userContent = `Input:\n\n${text}`;
+
+    const requestBody = {
+        model: modelId,
+        messages: [
+            { role: "system", content: systemContent },
+            { role: "user", content: userContent },
+        ],
+        temperature: 0.1,
+        stream: false,
+    };
+
+    const url = `${XAI_API_BASE}/chat/completions`;
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${grokApiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(
+            `Grok API Error: ${response.status} - ${
+                errorData?.error?.message || "Unknown"
+            }`
+        );
+    }
+
+    const data = await response.json();
+    if (!data?.choices?.length) {
+        throw new Error("Invalid response structure from Grok API.");
+    }
+    return data.choices[0].message?.content?.trim() || "";
+}
+
+// --- Gemini API Call ---
+async function callGeminiApi(modelId, text, sourceLanguage, targetLanguage) {
+    const { geminiApiKey } = await chrome.storage.sync.get("geminiApiKey");
+    if (!geminiApiKey) {
+        throw new Error(
+            "Gemini API Key not found. Please set it in the popup."
+        );
+    }
+
+    const modelApiName = modelId.replace("models/", "");
+    const systemInstruction = getTranslationInstructions(
+        sourceLanguage,
+        targetLanguage
+    );
+    const userMessage = `Input:\n\n${text}`;
 
     const generationConfig = {
         temperature: 0.1,
         responseMimeType: "text/plain",
     };
 
-    // CORRECTED: Build the request body based on the model family.
     let requestBody;
     const isGemmaModel = modelId.includes("gemma");
 
     if (isGemmaModel) {
-        // For Gemma, combine system and user prompts into a single user message.
         const combinedPrompt = `${systemInstruction}\n\n${userMessage}`;
         requestBody = {
             contents: [{ role: "user", parts: [{ text: combinedPrompt }] }],
             generationConfig,
         };
     } else {
-        // For Gemini, use the dedicated systemInstruction field.
         requestBody = {
             systemInstruction: { parts: [{ text: systemInstruction }] },
             contents: [{ role: "user", parts: [{ text: userMessage }] }],
@@ -239,7 +297,7 @@ async function callGeminiApi(text, sourceLanguage, targetLanguage) {
     }
 
     let lastErr;
-    for (const base of API_BASES) {
+    for (const base of GEMINI_API_BASES) {
         const url = `${base}/models/${modelApiName}:generateContent?key=${geminiApiKey}`;
         try {
             const response = await fetch(url, {
@@ -256,7 +314,15 @@ async function callGeminiApi(text, sourceLanguage, targetLanguage) {
                 );
             }
             const data = await response.json();
-            return extractTextFromModelResponse(data);
+            const cands = data?.candidates || [];
+            if (cands.length === 0) throw new Error("No candidates returned.");
+            const cand =
+                cands.find((c) => c.finishReason !== "SAFETY") || cands[0];
+            if (cand.finishReason === "SAFETY")
+                throw new Error("Blocked by safety.");
+            const parts = cand?.content?.parts;
+            if (!parts) throw new Error("Invalid response structure.");
+            return parts.map((p) => p.text).join("").trim();
         } catch (e) {
             lastErr = e;
         }
