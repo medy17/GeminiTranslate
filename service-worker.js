@@ -98,7 +98,7 @@ async function callAI(textArray, source, target, model, gemKey, grokKey) {
 
 async function fetchGemini(apiKey, model, sys, user) {
     // Gemini doesn't support standard system prompts in all models in the same way,
-    // but for 1.5/2.5 flash, we can put it in content or systemInstruction depending on API version.
+    // but for 1.5/2.5 flash, we can put it in content or systemInstruction depending on the API version.
     // We'll use the safe v1beta approach combined into the user prompt for maximum compatibility with JSON parsing.
 
     const url = `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`;
@@ -169,3 +169,11 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
         chrome.tabs.sendMessage(tab.id, { action: 'translateSelection' });
     }
 });
+
+try {
+    module.exports = {
+        processBatch,
+        callAI,
+        translationCache
+    };
+} catch (e) {}

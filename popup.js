@@ -195,3 +195,8 @@ els.btnClear.addEventListener('click', () => {
     chrome.runtime.sendMessage({ action: 'clearCache' });
     setStatus('Cache cleared', 'success');
 });
+
+// Export for testing
+if (typeof module !== 'undefined') {
+    module.exports = { loadSettings, saveSettings, els };
+}
