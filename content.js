@@ -1,204 +1,215 @@
-// A flag to ensure the listener is only added once
-if (!window.isGeminiTranslatorInjected) {
-    window.isGeminiTranslatorInjected = true;
+// Prevent double injection
+if (!window.hasGeminiTranslator) {
+    window.hasGeminiTranslator = true;
 
-    const SEPARATOR = "|||---|||";
-    let isTranslating = false;
+    // --- Configuration ---
+    const BATCH_CHAR_LIMIT = 2000; // Send ~2000 chars per API call to avoid timeouts
+    let isProcessing = false;
 
-    // --- Utility Functions ---
-
-    function createProgressIndicator() {
-        const progress = document.createElement("div");
-        progress.id = "gemini-progress";
-        progress.style.cssText = `
-      position: fixed; top: 20px; right: 20px;
-      background: #2b6cb0; color: white; padding: 10px 15px;
-      border-radius: 5px; z-index: 10000; font-family: 'IBM Plex Sans', sans-serif;
-      font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-    `;
-        document.body.appendChild(progress);
-        return progress;
-    }
-
-    function removeProgressIndicator() {
-        const progress = document.getElementById("gemini-progress");
-        if (progress) progress.remove();
-    }
-
-    function showNotification(message, type = "info") {
-        const notification = document.createElement("div");
-        const colors = {
-            info: "#2b6cb0",
-            success: "#2f855a",
-            error: "#c53030",
-        };
-        notification.style.cssText = `
-      position: fixed; top: 20px; left: 20px; padding: 12px 16px;
-      border-radius: 6px; z-index: 10000; font-family: 'IBM Plex Sans', sans-serif;
-      font-size: 14px; max-width: 300px; color: white;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-      background-color: ${colors[type] || colors.info};
-    `;
-        notification.textContent = message;
-        document.body.appendChild(notification);
-        setTimeout(() => notification.remove(), 4000);
-    }
-
-    // --- Core Logic ---
-
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        if (request.action === "ping") {
-            sendResponse({ pong: true });
-        } else if (request.action === "translate") {
-            doTranslate(request.sourceLanguage, request.targetLanguage);
-            sendResponse({ received: true });
-        } else if (request.action === "revert") {
-            doRevert();
-            sendResponse({ received: true });
+    // --- UI Helpers ---
+    function createOverlay(msg) {
+        let el = document.getElementById('gemini-overlay');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'gemini-overlay';
+            el.style.cssText = `
+                position: fixed; bottom: 20px; right: 20px; z-index: 999999;
+                background: #1e293b; color: white; padding: 12px 20px;
+                border-radius: 8px; font-family: sans-serif; font-size: 14px;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.3); border: 1px solid #334155;
+                display: flex; align-items: center; gap: 10px; transition: opacity 0.3s;
+            `;
+            document.body.appendChild(el);
         }
-        return true; // Keep message channel open for async response
+        el.innerHTML = `<div style="width:16px;height:16px;border:2px solid white;border-bottom-color:transparent;border-radius:50%;animation:geminiSpin 1s linear infinite"></div> <span>${msg}</span>`;
+
+        // Inject keyframe if needed
+        if(!document.getElementById('gemini-styles')) {
+            const s = document.createElement('style');
+            s.id = 'gemini-styles';
+            s.innerHTML = `@keyframes geminiSpin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} } .gemini-trans-highlight:hover { background: rgba(255, 255, 0, 0.2); }`;
+            document.head.appendChild(s);
+        }
+        return el;
+    }
+
+    function removeOverlay() {
+        const el = document.getElementById('gemini-overlay');
+        if (el) el.remove();
+    }
+
+    // --- Listener ---
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+        if (msg.action === 'ping') return sendResponse(true);
+
+        if (msg.action === 'translate') {
+            runFullPageTranslation(msg.source, msg.target);
+        } else if (msg.action === 'revert') {
+            revertTranslations();
+        } else if (msg.action === 'translateSelection') {
+            translateCurrentSelection();
+        }
     });
 
-    async function doTranslate(sourceLanguage, targetLanguage) {
-        if (isTranslating) {
-            showNotification("Translation already in progress.", "info");
-            return;
-        }
-        if (document.querySelector(".gemini-translated-text")) {
-            await doRevert();
-        }
+    // --- Core Translation Engine ---
+    async function runFullPageTranslation(source, target) {
+        if (isProcessing) return;
+        isProcessing = true;
+        const overlay = createOverlay("Scanning page...");
 
-        isTranslating = true;
-        const progress = createProgressIndicator();
-        progress.textContent = "Scanning page for text...";
-        document.body.style.cursor = "wait";
-
-        const walker = document.createTreeWalker(
-            document.body,
-            NodeFilter.SHOW_TEXT
-        );
+        // 1. Collect Text Nodes
         const textNodes = [];
-        const originalTexts = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+            acceptNode: (node) => {
+                const parent = node.parentElement;
+                if (!parent) return NodeFilter.FILTER_REJECT;
 
-        let node;
-        while ((node = walker.nextNode())) {
-            const parentTag = node.parentElement.tagName.toUpperCase();
-            const isUntranslatable = ["SCRIPT", "STYLE", "NOSCRIPT"].includes(
-                parentTag
-            );
-            const isMeaningful = node.nodeValue.trim().length > 1;
+                // Filters
+                const tag = parent.tagName.toLowerCase();
+                if (['script', 'style', 'noscript', 'textarea', 'input', 'code', 'pre'].includes(tag)) return NodeFilter.FILTER_REJECT;
+                if (parent.isContentEditable) return NodeFilter.FILTER_REJECT;
+                if (parent.getAttribute('translate') === 'no') return NodeFilter.FILTER_REJECT;
+                if (node.textContent.trim().length < 2) return NodeFilter.FILTER_REJECT; // Skip whitespace/symbols
+                if (parent.classList.contains('gemini-translated')) return NodeFilter.FILTER_REJECT; // Already done
 
-            if (!isUntranslatable && isMeaningful) {
-                textNodes.push(node);
-                originalTexts.push(node.nodeValue);
+                return NodeFilter.FILTER_ACCEPT;
             }
-        }
+        });
+
+        while (walker.nextNode()) textNodes.push(walker.currentNode);
 
         if (textNodes.length === 0) {
-            showNotification("No translatable text found on the page.", "info");
-            document.body.style.cursor = "default";
-            removeProgressIndicator();
-            isTranslating = false;
+            overlay.innerHTML = "No text found.";
+            setTimeout(removeOverlay, 2000);
+            isProcessing = false;
             return;
         }
 
-        progress.textContent = `Translating ${textNodes.length} text elements...`;
+        // 2. Batching Logic
+        let currentBatchNodes = [];
+        let currentCharCount = 0;
+        let totalTranslated = 0;
 
-        try {
-            const response = await chrome.runtime.sendMessage({
-                action: "getTranslation",
-                text: originalTexts.join(SEPARATOR),
-                sourceLanguage: sourceLanguage,
-                targetLanguage: targetLanguage,
-            });
+        for (let i = 0; i < textNodes.length; i++) {
+            const node = textNodes[i];
+            const text = node.textContent.trim();
 
-            if (response.success) {
-                progress.textContent = "Applying translations...";
-                const translations = response.translation.split(SEPARATOR);
-                if (translations.length === textNodes.length) {
-                    textNodes.forEach((node, index) => {
-                        const originalText = node.nodeValue;
-                        const translatedText = translations[index].trim();
-                        if (translatedText && translatedText !== originalText) {
-                            const span = document.createElement("span");
-                            span.className = "gemini-translated-text";
-                            span.dataset.originalText = originalText;
-                            span.textContent = translatedText;
-                            span.style.cursor = "pointer";
+            currentBatchNodes.push({ node, text });
+            currentCharCount += text.length;
 
-                            // UPDATED: Set initial tooltip
-                            span.title = `Original: "${originalText
-                                .trim()
-                                .substring(
-                                    0,
-                                    100
-                                )}..." (Click to revert)`;
+            // If batch full or last item
+            if (currentCharCount >= BATCH_CHAR_LIMIT || i === textNodes.length - 1) {
+                overlay.innerHTML = `Translating... (${Math.round((i / textNodes.length) * 100)}%)`;
 
-                            // UPDATED: Add enhanced click-to-revert with tooltip toggle
-                            span.addEventListener("click", function (e) {
-                                e.preventDefault();
-                                const isShowingTranslation =
-                                    this.textContent === translatedText;
-                                if (isShowingTranslation) {
-                                    // Revert to original
-                                    this.textContent = originalText;
-                                    this.title = `Translated: "${translatedText
-                                        .trim()
-                                        .substring(
-                                            0,
-                                            100
-                                        )}..." (Click to show translation)`;
-                                } else {
-                                    // Switch back to translation
-                                    this.textContent = translatedText;
-                                    this.title = `Original: "${originalText
-                                        .trim()
-                                        .substring(
-                                            0,
-                                            100
-                                        )}..." (Click to revert)`;
-                                }
-                            });
-                            node.replaceWith(span);
-                        }
+                // Send Batch
+                const texts = currentBatchNodes.map(item => item.text);
+                try {
+                    const response = await chrome.runtime.sendMessage({
+                        action: 'translateBatch',
+                        texts,
+                        source,
+                        target
                     });
-                    const cacheNote = response.fromCache ? " (from cache)" : "";
-                    showNotification(
-                        `Translated ${textNodes.length} elements${cacheNote}`,
-                        "success"
-                    );
-                } else {
-                    showNotification("Translation count mismatch.", "error");
+
+                    if (response.success) {
+                        applyTranslations(currentBatchNodes, response.translations);
+                    } else {
+                        console.error("Batch failed", response.error);
+                    }
+                } catch (e) {
+                    console.error("Network error", e);
                 }
-            } else {
-                showNotification(`Translation failed: ${response.error}`, "error");
+
+                // Reset Batch
+                currentBatchNodes = [];
+                currentCharCount = 0;
             }
-        } catch (error) {
-            showNotification(`Request failed: ${error.message}`, "error");
-        } finally {
-            document.body.style.cursor = "default";
-            removeProgressIndicator();
-            isTranslating = false;
         }
+
+        overlay.innerHTML = "Translation Complete!";
+        setTimeout(removeOverlay, 3000);
+        isProcessing = false;
     }
 
-    function doRevert() {
-        const translatedElements = document.querySelectorAll(
-            ".gemini-translated-text, .gemini-translated-selection"
-        );
-        if (translatedElements.length > 0) {
-            translatedElements.forEach((span) => {
-                const originalTextNode = document.createTextNode(
-                    span.dataset.originalText
-                );
-                span.replaceWith(originalTextNode);
-            });
-            showNotification(
-                `Reverted ${translatedElements.length} translations`,
-                "success"
-            );
+    function applyTranslations(nodeItems, translatedTexts) {
+        nodeItems.forEach((item, index) => {
+            const translation = translatedTexts[index];
+            if (!translation || translation === item.text) return;
+
+            // Non-destructive Replacement
+            const span = document.createElement('span');
+            span.className = 'gemini-translated gemini-trans-highlight';
+            span.textContent = translation;
+            span.title = `Original: ${item.text}`;
+            span.dataset.original = item.text;
+            span.style.cursor = 'help';
+
+            // Click to toggle
+            span.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (span.textContent === translation) {
+                    span.textContent = item.text;
+                    span.style.opacity = '0.6';
+                } else {
+                    span.textContent = translation;
+                    span.style.opacity = '1';
+                }
+            };
+
+            if (item.node.parentNode) {
+                item.node.parentNode.replaceChild(span, item.node);
+            }
+        });
+    }
+
+    function revertTranslations() {
+        const els = document.querySelectorAll('.gemini-translated');
+        els.forEach(el => {
+            const txt = document.createTextNode(el.dataset.original);
+            el.parentNode.replaceChild(txt, el);
+        });
+        createOverlay(`Reverted ${els.length} elements.`);
+        setTimeout(removeOverlay, 2000);
+    }
+
+    async function translateCurrentSelection() {
+        const sel = window.getSelection();
+        if (!sel.toString().trim()) return;
+
+        const text = sel.toString().trim();
+        const range = sel.getRangeAt(0);
+
+        // Loading placeholder
+        const loader = document.createElement('span');
+        loader.textContent = ' [Translating...] ';
+        loader.style.color = '#3b82f6';
+        range.deleteContents();
+        range.insertNode(loader);
+
+        // Get settings
+        const settings = await chrome.storage.sync.get(['sourceLang', 'targetLang']);
+
+        const response = await chrome.runtime.sendMessage({
+            action: 'translateBatch',
+            texts: [text],
+            source: settings.sourceLang || 'Auto-detect',
+            target: settings.targetLang || 'English'
+        });
+
+        if (response.success) {
+            const span = document.createElement('span');
+            span.className = 'gemini-translated';
+            span.textContent = response.translations[0];
+            span.title = "Original: " + text;
+            span.dataset.original = text;
+            span.style.borderBottom = "2px dotted #3b82f6";
+            span.onclick = function() {
+                this.textContent = this.textContent === text ? response.translations[0] : text;
+            };
+            loader.replaceWith(span);
         } else {
-            showNotification("No translated text found to revert.", "info");
+            loader.textContent = text; // Revert on fail
         }
     }
 }

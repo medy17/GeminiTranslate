@@ -1,255 +1,197 @@
-// --- Element References ---
-const apiKeyInput = document.getElementById("apiKey");
-const grokApiKeyInput = document.getElementById("grokApiKey");
-const modelSelect = document.getElementById("modelSelect");
-const sourceLanguageSelect = document.getElementById("sourceLanguageSelect");
-const targetLanguageSelect = document.getElementById("targetLanguageSelect");
-const autoSitesTextarea = document.getElementById("autoSites");
-const saveSettingsButton = document.getElementById("saveSettings");
-const translateButton = document.getElementById("translatePage");
-const revertButton = document.getElementById("revertPage");
-const clearCacheButton = document.getElementById("clearCache");
-const statusDiv = document.getElementById("status");
+// DOM Elements
+const tabs = document.querySelectorAll('.tab-btn');
+const contents = document.querySelectorAll('.tab-content');
+const els = {
+    source: document.getElementById('sourceLang'),
+    target: document.getElementById('targetLang'),
+    model: document.getElementById('modelSelect'),
+    geminiKey: document.getElementById('geminiKey'),
+    grokKey: document.getElementById('grokKey'),
+    autoSites: document.getElementById('autoSites'),
+    btnTranslate: document.getElementById('btnTranslate'),
+    btnRevert: document.getElementById('btnRevert'),
+    btnClear: document.getElementById('btnClearCache'),
+    status: document.getElementById('status')
+};
 
-// --- Functions ---
-function showStatus(message, duration = 3000, isError = false) {
-    statusDiv.textContent = message;
-    statusDiv.style.color = isError ? "#e53e3e" : "#38a169";
-    if (duration > 0) {
-        setTimeout(() => {
-            statusDiv.textContent = "";
-        }, duration);
-    }
-}
-
-async function getActiveTab() {
-    try {
-        const [tab] = await chrome.tabs.query({
-            active: true,
-            currentWindow: true,
-        });
-        return tab;
-    } catch (error) {
-        console.error("Failed to get active tab:", error);
-        return null;
-    }
-}
-
-async function ensureContentScript(tabId) {
-    try {
-        const results = await chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            func: () => window.isGeminiTranslatorInjected,
-        });
-        if (!results || !results[0] || !results[0].result) {
-            await chrome.scripting.executeScript({
-                target: { tabId: tabId },
-                files: ["content.js"],
-            });
-        }
-    } catch (error) {
-        console.error("Failed to inject content script:", error);
-        throw new Error("Cannot run on this page");
-    }
-}
-
-// --- Custom Select Logic ---
-
-function closeAllSelect() {
-    const allItemsDivs = document.querySelectorAll(".select-items");
-    const allSelectedDivs = document.querySelectorAll(".select-selected");
-
-    allItemsDivs.forEach((itemsDiv) => (itemsDiv.style.display = "none"));
-    allSelectedDivs.forEach((selectedDiv) =>
-        selectedDiv.classList.remove("select-arrow-active")
-    );
-}
-
-function initializeCustomSelects() {
-    const wrappers = document.querySelectorAll(".custom-select-wrapper");
-
-    wrappers.forEach((wrapper) => {
-        const selectEl = wrapper.querySelector("select");
-        if (!selectEl || wrapper.querySelector(".select-selected")) return; // Already initialized
-
-        // Create the main display element
-        const selectedDiv = document.createElement("div");
-        selectedDiv.className = "select-selected";
-        selectedDiv.innerHTML =
-            selectEl.options[selectEl.selectedIndex].innerHTML;
-        wrapper.appendChild(selectedDiv);
-
-        // Create the options container
-        const itemsDiv = document.createElement("div");
-        itemsDiv.className = "select-items";
-
-        Array.from(selectEl.children).forEach((child) => {
-            if (child.tagName.toLowerCase() === "optgroup") {
-                const optgroupDiv = document.createElement("div");
-                optgroupDiv.className = "select-optgroup";
-                optgroupDiv.innerHTML = child.label;
-                itemsDiv.appendChild(optgroupDiv);
-
-                Array.from(child.children).forEach((option) =>
-                    createOptionDiv(option)
-                );
-            } else if (child.tagName.toLowerCase() === "option") {
-                createOptionDiv(child);
-            }
-        });
-
-        wrapper.appendChild(itemsDiv);
-
-        function createOptionDiv(optionEl) {
-            const itemDiv = document.createElement("div");
-            itemDiv.className = "select-item";
-            itemDiv.innerHTML = optionEl.innerHTML;
-            itemDiv.setAttribute("data-value", optionEl.value);
-
-            if (optionEl.value === selectEl.value) {
-                itemDiv.classList.add("same-as-selected");
-            }
-
-            itemsDiv.appendChild(itemDiv);
-
-            itemDiv.addEventListener("click", function () {
-                for (let i = 0; i < selectEl.options.length; i++) {
-                    if (
-                        selectEl.options[i].value ===
-                        this.getAttribute("data-value")
-                    ) {
-                        selectEl.selectedIndex = i;
-                        break;
-                    }
-                }
-
-                selectedDiv.innerHTML = this.innerHTML;
-
-                const sameAsSelected =
-                    itemsDiv.querySelector(".same-as-selected");
-                if (sameAsSelected) {
-                    sameAsSelected.classList.remove("same-as-selected");
-                }
-                this.classList.add("same-as-selected");
-
-                closeAllSelect();
-            });
-        }
-
-        selectedDiv.addEventListener("click", function (e) {
-            e.stopPropagation();
-            if (!this.classList.contains("select-arrow-active")) {
-                closeAllSelect();
-            }
-            itemsDiv.style.display =
-                itemsDiv.style.display === "block" ? "none" : "block";
-            this.classList.toggle("select-arrow-active");
-        });
-    });
-}
-
-// --- Event Listeners ---
-
-document.addEventListener("DOMContentLoaded", () => {
-    const keysToGet = [
-        "geminiApiKey",
-        "grokApiKey",
-        "selectedModel",
-        "sourceLanguage",
-        "targetLanguage",
-        "autoTranslateSites",
-    ];
-    chrome.storage.sync.get(keysToGet, (settings) => {
-        if (chrome.runtime.lastError) {
-            showStatus("Failed to load settings", 3000, true);
-            return;
-        }
-        if (settings.geminiApiKey) apiKeyInput.value = settings.geminiApiKey;
-        if (settings.grokApiKey) grokApiKeyInput.value = settings.grokApiKey;
-        if (settings.selectedModel) modelSelect.value = settings.selectedModel;
-        if (settings.sourceLanguage)
-            sourceLanguageSelect.value = settings.sourceLanguage;
-        if (settings.targetLanguage)
-            targetLanguageSelect.value = settings.targetLanguage;
-        if (settings.autoTranslateSites) {
-            autoSitesTextarea.value = settings.autoTranslateSites.join("\n");
-        }
-
-        // Initialize the custom select AFTER loading the settings
-        initializeCustomSelects();
-
-        showStatus("Settings loaded successfully", 2000);
+// --- Tab Logic ---
+tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        contents.forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(tab.dataset.tab).classList.add('active');
     });
 });
 
-saveSettingsButton.addEventListener("click", () => {
+// --- Custom Select Logic (The Fix) ---
+function initCustomSelects() {
+    document.querySelectorAll('select').forEach(select => {
+        // Check if already initialized
+        if(select.parentNode.classList.contains('custom-select-wrapper')) return;
+
+        // 1. Create Wrapper
+        const wrapper = document.createElement('div');
+        wrapper.className = 'custom-select-wrapper';
+        select.parentNode.insertBefore(wrapper, select);
+        wrapper.appendChild(select);
+
+        // 2. Create Trigger (The box you click)
+        const trigger = document.createElement('div');
+        trigger.className = 'custom-select-trigger';
+        trigger.innerHTML = `<span>${select.options[select.selectedIndex]?.text || 'Select...'}</span>`;
+        wrapper.appendChild(trigger);
+
+        // 3. Create Options Container
+        const optionsDiv = document.createElement('div');
+        optionsDiv.className = 'custom-options';
+
+        // 4. Populate Options (Support Optgroups)
+        const buildOption = (opt) => {
+            const div = document.createElement('div');
+            div.className = 'custom-option';
+            if(opt.selected) div.classList.add('selected');
+            div.textContent = opt.text;
+            div.dataset.value = opt.value;
+
+            div.addEventListener('click', () => {
+                // Sync with real select
+                select.value = opt.value;
+                trigger.querySelector('span').textContent = opt.text;
+
+                // Visual updates
+                optionsDiv.querySelectorAll('.custom-option').forEach(el => el.classList.remove('selected'));
+                div.classList.add('selected');
+
+                // Close
+                wrapper.classList.remove('open');
+
+                // Trigger existing auto-save logic
+                select.dispatchEvent(new Event('change'));
+            });
+            return div;
+        };
+
+        Array.from(select.children).forEach(child => {
+            if(child.tagName === 'OPTGROUP') {
+                const label = document.createElement('div');
+                label.className = 'custom-optgroup-label';
+                label.textContent = child.label;
+                optionsDiv.appendChild(label);
+                Array.from(child.children).forEach(opt => optionsDiv.appendChild(buildOption(opt)));
+            } else {
+                optionsDiv.appendChild(buildOption(child));
+            }
+        });
+
+        wrapper.appendChild(optionsDiv);
+
+        // 5. Event Listeners
+        trigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // Close others
+            document.querySelectorAll('.custom-select-wrapper').forEach(el => {
+                if(el !== wrapper) el.classList.remove('open');
+            });
+            wrapper.classList.toggle('open');
+
+            // Scroll to selected
+            if(wrapper.classList.contains('open')) {
+                const selected = optionsDiv.querySelector('.selected');
+                if(selected) selected.scrollIntoView({ block: 'nearest' });
+            }
+        });
+    });
+
+    // Close on click outside
+    document.addEventListener('click', () => {
+        document.querySelectorAll('.custom-select-wrapper').forEach(el => el.classList.remove('open'));
+    });
+}
+
+// --- Storage Logic ---
+const SETTINGS_KEYS = ['sourceLang', 'targetLang', 'selectedModel', 'geminiApiKey', 'grokApiKey', 'autoTranslateSites'];
+
+function loadSettings() {
+    chrome.storage.sync.get(SETTINGS_KEYS, (data) => {
+        if (data.sourceLang) els.source.value = data.sourceLang;
+        if (data.targetLang) els.target.value = data.targetLang;
+        if (data.selectedModel) els.model.value = data.selectedModel;
+        if (data.geminiApiKey) els.geminiKey.value = data.geminiApiKey;
+        if (data.grokApiKey) els.grokKey.value = data.grokApiKey;
+        if (data.autoTranslateSites) els.autoSites.value = data.autoTranslateSites.join('\n');
+
+        // Initialize Custom Selects AFTER data is loaded so they show correct initial values
+        initCustomSelects();
+    });
+}
+
+function saveSettings() {
     const settings = {
-        geminiApiKey: apiKeyInput.value.trim(),
-        grokApiKey: grokApiKeyInput.value.trim(),
-        selectedModel: modelSelect.value,
-        sourceLanguage: sourceLanguageSelect.value,
-        targetLanguage: targetLanguageSelect.value,
-        autoTranslateSites: autoSitesTextarea.value
-            .split("\n")
-            .map((s) => s.trim())
-            .filter(Boolean),
+        sourceLang: els.source.value,
+        targetLang: els.target.value,
+        selectedModel: els.model.value,
+        geminiApiKey: els.geminiKey.value.trim(),
+        grokApiKey: els.grokKey.value.trim(),
+        autoTranslateSites: els.autoSites.value.split('\n').map(s => s.trim()).filter(Boolean)
     };
 
     chrome.storage.sync.set(settings, () => {
-        if (chrome.runtime.lastError) {
-            showStatus("Failed to save settings", 3000, true);
-        } else {
-            showStatus("Settings saved successfully!");
-        }
+        setStatus('Settings saved', 'success');
     });
-});
+}
 
-translateButton.addEventListener("click", async () => {
-    const tab = await getActiveTab();
-    if (!tab || !tab.url || tab.url.startsWith("chrome://")) {
-        showStatus("Cannot run on this page", 3000, true);
+// --- Action Logic ---
+async function sendToActiveTab(message) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || tab.url.startsWith('chrome://')) {
+        setStatus('Cannot run on this page', 'error');
         return;
     }
 
     try {
-        await ensureContentScript(tab.id);
-        chrome.tabs.sendMessage(tab.id, {
-            action: "translate",
-            sourceLanguage: sourceLanguageSelect.value,
-            targetLanguage: targetLanguageSelect.value,
-        });
-        showStatus("Translation started...");
-        window.close();
-    } catch (error) {
-        showStatus(error.message, 3000, true);
+        await chrome.tabs.sendMessage(tab.id, { action: 'ping' });
+    } catch (e) {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    }
+
+    chrome.tabs.sendMessage(tab.id, message);
+    if(message.action === 'translate') window.close();
+}
+
+function setStatus(msg, type) {
+    els.status.textContent = msg;
+    els.status.style.color = type === 'error' ? '#ef4444' : '#10b981';
+    setTimeout(() => els.status.textContent = '', 3000);
+}
+
+// --- Event Listeners ---
+document.addEventListener('DOMContentLoaded', loadSettings);
+
+// Auto-save
+[els.source, els.target, els.model, els.geminiKey, els.grokKey, els.autoSites].forEach(el => {
+    el.addEventListener('change', saveSettings);
+    if(el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+        el.addEventListener('blur', saveSettings);
     }
 });
 
-revertButton.addEventListener("click", async () => {
-    const tab = await getActiveTab();
-    if (!tab || !tab.url || tab.url.startsWith("chrome://")) {
-        showStatus("Cannot run on this page", 3000, true);
-        return;
-    }
-    try {
-        await ensureContentScript(tab.id);
-        chrome.tabs.sendMessage(tab.id, { action: "revert" });
-        showStatus("Reverting translations...");
-        window.close();
-    } catch (error) {
-        showStatus(error.message, 3000, true);
-    }
-});
+els.btnTranslate.addEventListener('click', () => {
+    els.btnTranslate.disabled = true;
+    els.btnTranslate.querySelector('.spinner').style.display = 'block';
 
-clearCacheButton.addEventListener("click", () => {
-    chrome.runtime.sendMessage({ action: "clearCache" }, () => {
-        if (chrome.runtime.lastError) {
-            showStatus("Failed to clear cache", 3000, true);
-        } else {
-            showStatus("Translation cache cleared");
-        }
+    sendToActiveTab({
+        action: 'translate',
+        source: els.source.value,
+        target: els.target.value
     });
 });
 
-// Close the custom select if the user clicks outside of it
-document.addEventListener("click", closeAllSelect);
+els.btnRevert.addEventListener('click', () => {
+    sendToActiveTab({ action: 'revert' });
+});
+
+els.btnClear.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'clearCache' });
+    setStatus('Cache cleared', 'success');
+});

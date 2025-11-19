@@ -1,387 +1,171 @@
-/* eslint-disable no-console */
-
-// --- Caching & Rate Limiting ---
+const CACHE_LIMIT = 1500;
 const translationCache = new Map();
-const MAX_CACHE_SIZE = 1000;
-let apiCallQueue = [];
-let isProcessingQueue = false;
-const MAX_CONCURRENT_CALLS = 3;
-const MIN_DELAY_BETWEEN_CALLS = 1000; // ms
-const RESPONSE_SEPARATOR = "|||---|||";
 
-// --- API Endpoints ---
-const GEMINI_API_BASES = [
-    "https://generativelanguage.googleapis.com/v1",
-    "https://generativelanguage.googleapis.com/v1beta",
-];
-const XAI_API_BASE = "https://api.x.ai/v1";
-
-// --- Context Menu Setup ---
-chrome.runtime.onInstalled.addListener(() => {
-    try {
-        chrome.contextMenus.removeAll(() => {
-            chrome.contextMenus.create({
-                id: "translateSelection",
-                title: "Translate selected text",
-                contexts: ["selection"],
-            });
-        });
-    } catch (error) {
-        console.error("Failed to setup context menu:", error);
-    }
-});
-
-// --- Injected Script for Context Menu Action ---
-function replaceAndTranslateSelection(sourceLanguage, targetLanguage) {
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
-    const selectedText = selection.toString().trim();
-    if (!selectedText) return;
-
-    const range = selection.getRangeAt(0);
-    const wrapper = document.createElement("span");
-    wrapper.className = "gemini-translated-selection";
-    wrapper.style.cssText = "font-style: italic; cursor: pointer;";
-    wrapper.textContent = "Translating...";
-    wrapper.dataset.originalText = selectedText;
-    range.deleteContents();
-    range.insertNode(wrapper);
-
-    chrome.runtime
-        .sendMessage({
-            action: "getSelectionTranslation",
-            text: selectedText,
-            sourceLanguage: sourceLanguage,
-            targetLanguage: targetLanguage,
-        })
-        .then((response) => {
-            wrapper.style.fontStyle = "normal";
-            if (response && response.success) {
-                const translatedText = response.translation;
-                wrapper.textContent = translatedText;
-                wrapper.title = `Original: "${selectedText}" (Click to revert)`;
-
-                wrapper.addEventListener("click", function (e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const isShowingTranslation =
-                        this.textContent === translatedText;
-                    if (isShowingTranslation) {
-                        this.textContent = this.dataset.originalText;
-                        this.title = `Translated: "${translatedText}" (Click to show translation)`;
-                    } else {
-                        this.textContent = translatedText;
-                        this.title = `Original: "${this.dataset.originalText}" (Click to revert)`;
-                    }
-                });
-            } else {
-                wrapper.textContent = selectedText; // Revert
-                wrapper.title = `Failed: ${response?.error || "Unknown"}`;
-                wrapper.style.cursor = "default";
-            }
-        });
-}
-
-// --- Event Listeners ---
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-    if (info.menuItemId === "translateSelection" && info.selectionText) {
-        try {
-            await ensureContentScript(tab.id);
-            const { sourceLanguage, targetLanguage } =
-                await getTranslationLanguages();
-            await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                func: replaceAndTranslateSelection,
-                args: [sourceLanguage, targetLanguage],
-            });
-        } catch (error) {
-            console.error("Context menu script execution failed:", error);
-        }
-    }
-});
-
+// --- Message Handler ---
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === "getTranslation") {
-        handleTranslationRequest(request, sendResponse);
-        return true; // async
+    if (request.action === 'translateBatch') {
+        processBatch(request)
+            .then(response => sendResponse(response))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true; // Async
     }
-    if (request.action === "getSelectionTranslation") {
-        handleTranslationRequest(
-            { ...request, isSelection: true },
-            sendResponse
-        );
-        return true; // async
-    }
-    if (request.action === "clearCache") {
+    if (request.action === 'clearCache') {
         translationCache.clear();
-        sendResponse({ success: true });
     }
 });
 
-// --- Core Translation Logic ---
-async function handleTranslationRequest(request, sendResponse) {
+// --- Core Logic ---
+async function processBatch({ texts, source, target }) {
+    const { selectedModel, geminiApiKey, grokApiKey } = await chrome.storage.sync.get(['selectedModel', 'geminiApiKey', 'grokApiKey']);
+
+    // 1. Check Cache & Identify Missing indices
+    const results = new Array(texts.length).fill(null);
+    const missingIndices = [];
+    const textsToTranslate = [];
+
+    texts.forEach((text, index) => {
+        const key = `${source}:${target}:${text}`;
+        if (translationCache.has(key)) {
+            results[index] = translationCache.get(key);
+        } else {
+            missingIndices.push(index);
+            textsToTranslate.push(text);
+        }
+    });
+
+    if (textsToTranslate.length === 0) {
+        return { success: true, translations: results };
+    }
+
+    // 2. Call API for missing texts
     try {
-        const { text, sourceLanguage, targetLanguage } = request;
-        const cacheKey = `${sourceLanguage}:${targetLanguage}:${text.substring(
-            0,
-            100
-        )}`;
+        const translatedTexts = await callAI(textsToTranslate, source, target, selectedModel, geminiApiKey, grokApiKey);
 
-        if (translationCache.has(cacheKey)) {
-            sendResponse({
-                success: true,
-                translation: translationCache.get(cacheKey),
-                fromCache: true,
-            });
-            return;
+        // 3. Merge results and update cache
+        if (translatedTexts.length !== textsToTranslate.length) {
+            throw new Error(`Mismatch: Sent ${textsToTranslate.length}, got ${translatedTexts.length}`);
         }
 
-        const translation = await queueApiCall(
-            text,
-            sourceLanguage,
-            targetLanguage
-        );
-        cacheTranslation(cacheKey, translation);
-        sendResponse({ success: true, translation });
+        translatedTexts.forEach((trans, i) => {
+            const originalIndex = missingIndices[i];
+            const originalText = textsToTranslate[i];
+
+            // Cache and Store
+            translationCache.set(`${source}:${target}:${originalText}`, trans);
+            results[originalIndex] = trans;
+        });
+
+        // Prune cache if too big
+        if (translationCache.size > CACHE_LIMIT) {
+            const keys = translationCache.keys();
+            for (let i = 0; i < 200; i++) translationCache.delete(keys.next().value);
+        }
+
+        return { success: true, translations: results };
+
     } catch (error) {
-        console.error("Translation failed:", error);
-        sendResponse({ success: false, error: error.message });
+        console.error("Translation Error:", error);
+        return { success: false, error: error.message };
     }
 }
 
-async function queueApiCall(text, sourceLanguage, targetLanguage) {
-    return new Promise((resolve, reject) => {
-        apiCallQueue.push({
-            text,
-            sourceLanguage,
-            targetLanguage,
-            resolve,
-            reject,
-        });
-        processApiQueue();
-    });
-}
+// --- AI Provider Logic ---
+async function callAI(textArray, source, target, model, gemKey, grokKey) {
+    const isGrok = model && model.startsWith('grok');
 
-async function processApiQueue() {
-    if (isProcessingQueue || apiCallQueue.length === 0) return;
-    isProcessingQueue = true;
-    const batch = apiCallQueue.splice(
-        0,
-        Math.min(MAX_CONCURRENT_CALLS, apiCallQueue.length)
-    );
-    await Promise.all(
-        batch.map((call) =>
-            makeApiCall(call.text, call.sourceLanguage, call.targetLanguage)
-                .then(call.resolve)
-                .catch(call.reject)
-        )
-    );
-    isProcessingQueue = false;
-    if (apiCallQueue.length > 0)
-        setTimeout(processApiQueue, MIN_DELAY_BETWEEN_CALLS);
-}
+    if (isGrok && !grokKey) throw new Error("Grok API Key missing");
+    if (!isGrok && !gemKey) throw new Error("Gemini API Key missing");
 
-async function makeApiCall(text, sourceLanguage, targetLanguage) {
-    const { selectedModel } = await chrome.storage.sync.get("selectedModel");
-    const modelId = selectedModel || "models/gemini-2.5-flash"; // Default
+    const systemPrompt = `
+        You are a translation engine. 
+        Input: A JSON array of strings.
+        Task: Translate each string from ${source} to ${target}.
+        Output: A strictly valid JSON array of strings. 
+        Rules: 
+        1. Maintain the exact order. 
+        2. Do not include conversational text, markdown formatting, or code blocks (no \`\`\`json).
+        3. Just the raw JSON array.
+    `.trim();
 
-    if (modelId.startsWith("grok-")) {
-        return callGrokApi(modelId, text, sourceLanguage, targetLanguage);
+    const userPrompt = JSON.stringify(textArray);
+
+    if (isGrok) {
+        return await fetchGrok(grokKey, model, systemPrompt, userPrompt);
     } else {
-        return callGeminiApi(modelId, text, sourceLanguage, targetLanguage);
+        return await fetchGemini(gemKey, model || 'models/gemini-2.5-flash', systemPrompt, userPrompt);
     }
 }
 
-// --- Universal Prompt Logic ---
-function getTranslationInstructions(sourceLanguage, targetLanguage) {
-    const sourceInstruction =
-        sourceLanguage === "Auto-detect"
-            ? "Detect the language of the following text and translate it"
-            : `Translate the following ${sourceLanguage} text`;
+async function fetchGemini(apiKey, model, sys, user) {
+    // Gemini doesn't support standard system prompts in all models in the same way,
+    // but for 1.5/2.5 flash, we can put it in content or systemInstruction depending on API version.
+    // We'll use the safe v1beta approach combined into the user prompt for maximum compatibility with JSON parsing.
 
-    return [
-        "You are a professional, direct translator.",
-        `Task: ${sourceInstruction} to ${targetLanguage}.`,
-        "Return ONLY the translated text for each input segment.",
-        `Segments are delimited by: ${RESPONSE_SEPARATOR}`,
-        "Preserve the exact number of segments and all original line breaks.",
-        "Do not add explanations, notes, quotes, or markdown.",
-    ].join(" ");
-}
+    const url = `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`;
 
-// --- Grok API Call ---
-async function callGrokApi(modelId, text, sourceLanguage, targetLanguage) {
-    const { grokApiKey } = await chrome.storage.sync.get("grokApiKey");
-    if (!grokApiKey) {
-        throw new Error("Grok API Key not found. Please set it in the popup.");
-    }
-
-    const systemContent = getTranslationInstructions(
-        sourceLanguage,
-        targetLanguage
-    );
-    const userContent = `Input:\n\n${text}`;
-
-    const requestBody = {
-        model: modelId,
-        messages: [
-            { role: "system", content: systemContent },
-            { role: "user", content: userContent },
-        ],
-        temperature: 0.1,
-        stream: false,
+    const payload = {
+        contents: [{
+            role: "user",
+            parts: [{ text: sys + "\n\nInput:\n" + user }]
+        }],
+        generationConfig: {
+            responseMimeType: "application/json" // Force JSON mode (Gemini specific feature)
+        }
     };
 
-    const url = `${XAI_API_BASE}/chat/completions`;
-    const response = await fetch(url, {
-        method: "POST",
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error?.message || `Gemini Error ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+    return JSON.parse(rawText);
+}
+
+async function fetchGrok(apiKey, model, sys, user) {
+    const resp = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST',
         headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${grokApiKey}`,
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
         },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify({
+            model: model,
+            messages: [
+                { role: "system", content: sys },
+                { role: "user", content: user }
+            ],
+            temperature: 0.1
+        })
     });
 
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(
-            `Grok API Error: ${response.status} - ${
-                errorData?.error?.message || "Unknown"
-            }`
-        );
-    }
+    if (!resp.ok) throw new Error(`Grok Error ${resp.status}`);
 
-    const data = await response.json();
-    if (!data?.choices?.length) {
-        throw new Error("Invalid response structure from Grok API.");
-    }
-    return data.choices[0].message?.content?.trim() || "";
+    const data = await resp.json();
+    let content = data.choices[0].message.content;
+
+    // Clean up if the model added markdown blocks
+    content = content.replace(/```json/g, '').replace(/```/g, '').trim();
+
+    return JSON.parse(content);
 }
 
-// --- Gemini API Call ---
-async function callGeminiApi(modelId, text, sourceLanguage, targetLanguage) {
-    const { geminiApiKey } = await chrome.storage.sync.get("geminiApiKey");
-    if (!geminiApiKey) {
-        throw new Error(
-            "Gemini API Key not found. Please set it in the popup."
-        );
-    }
+// --- Context Menu ---
+chrome.contextMenus.create({
+    id: "translateSelection",
+    title: "Translate Selection",
+    contexts: ["selection"]
+}, () => chrome.runtime.lastError && {}); // Ignore exists error
 
-    const modelApiName = modelId.replace("models/", "");
-    const systemInstruction = getTranslationInstructions(
-        sourceLanguage,
-        targetLanguage
-    );
-    const userMessage = `Input:\n\n${text}`;
-
-    const generationConfig = {
-        temperature: 0.1,
-        responseMimeType: "text/plain",
-    };
-
-    let requestBody;
-    const isGemmaModel = modelId.includes("gemma");
-
-    if (isGemmaModel) {
-        const combinedPrompt = `${systemInstruction}\n\n${userMessage}`;
-        requestBody = {
-            contents: [{ role: "user", parts: [{ text: combinedPrompt }] }],
-            generationConfig,
-        };
-    } else {
-        requestBody = {
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            contents: [{ role: "user", parts: [{ text: userMessage }] }],
-            generationConfig,
-        };
-    }
-
-    let lastErr;
-    for (const base of GEMINI_API_BASES) {
-        const url = `${base}/models/${modelApiName}:generateContent?key=${geminiApiKey}`;
-        try {
-            const response = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(requestBody),
-            });
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => null);
-                throw new Error(
-                    `API Error: ${response.status} - ${
-                        errorData?.error?.message || "Unknown"
-                    }`
-                );
-            }
-            const data = await response.json();
-            const cands = data?.candidates || [];
-            if (cands.length === 0) throw new Error("No candidates returned.");
-            const cand =
-                cands.find((c) => c.finishReason !== "SAFETY") || cands[0];
-            if (cand.finishReason === "SAFETY")
-                throw new Error("Blocked by safety.");
-            const parts = cand?.content?.parts;
-            if (!parts) throw new Error("Invalid response structure.");
-            return parts.map((p) => p.text).join("").trim();
-        } catch (e) {
-            lastErr = e;
-        }
-    }
-    throw lastErr || new Error("Failed to reach Gemini API.");
-}
-
-// --- Utility Functions ---
-function cacheTranslation(key, translation) {
-    if (translationCache.size >= MAX_CACHE_SIZE) {
-        const firstKey = translationCache.keys().next().value;
-        translationCache.delete(firstKey);
-    }
-    translationCache.set(key, translation);
-}
-
-async function getTranslationLanguages() {
-    const settings = await chrome.storage.sync.get([
-        "sourceLanguage",
-        "targetLanguage",
-    ]);
-    return {
-        sourceLanguage: settings.sourceLanguage || "Auto-detect",
-        targetLanguage: settings.targetLanguage || "English",
-    };
-}
-
-async function ensureContentScript(tabId) {
-    const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => window.isGeminiTranslatorInjected,
-    });
-    if (!results || !results[0]?.result) {
-        await chrome.scripting.executeScript({
-            target: { tabId },
-            files: ["content.js"],
-        });
-    }
-}
-
-// Auto-translate on navigation
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    if (changeInfo.status === "complete" && tab.url) {
-        const { autoTranslateSites, sourceLanguage, targetLanguage } =
-            await chrome.storage.sync.get([
-                "autoTranslateSites",
-                "sourceLanguage",
-                "targetLanguage",
-            ]);
-        if (
-            autoTranslateSites?.length > 0 &&
-            autoTranslateSites.some((site) => tab.url.includes(site))
-        ) {
-            await ensureContentScript(tabId);
-            chrome.tabs.sendMessage(tabId, {
-                action: "translate",
-                sourceLanguage: sourceLanguage || "Auto-detect",
-                targetLanguage: targetLanguage || "English",
-            });
-        }
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === "translateSelection") {
+        chrome.tabs.sendMessage(tab.id, { action: 'translateSelection' });
     }
 });

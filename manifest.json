@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Gemini Page Translator Pro",
-  "version": "2.2",
-  "description": "Translate web pages from any selected language to another using Gemini, with a dark mode UI and right-click support.",
+  "version": "3.0",
+  "description": "Advanced AI translation using Gemini & Grok with JSON-structured reliability.",
   "permissions": [
     "storage",
     "activeTab",
@@ -11,8 +11,8 @@
     "contextMenus"
   ],
   "host_permissions": [
-    "https://generativelanguage.googleapis.com/",
-    "https://api.x.ai/"
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.x.ai/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -24,5 +24,10 @@
   },
   "background": {
     "service_worker": "service-worker.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   }
 }
