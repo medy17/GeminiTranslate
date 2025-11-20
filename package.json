@@ -4,7 +4,9 @@
   "description": "<p align=\"center\">\r   <img src=\"icons/icon128.png\" alt=\"Project Banner\">\r </p>",
   "main": "content.js",
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "build": "node build.js",
+    "zip": "npm run build && cd dist && npx bestzip ../extension.zip *"
   },
   "repository": {
     "type": "git",
