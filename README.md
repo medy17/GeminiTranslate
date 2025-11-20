@@ -109,6 +109,7 @@ The project is built with the **Manifest V3** standard.
 3.  Enable **"Developer mode"** (usually a toggle in the top-right).
 4.  Click **"Load unpacked"**.
 5.  Select the directory containing the `manifest.json` file.
+6.  If you get an error regarding the `__tests__` folder, run `npm run build` then load the resulting `dist` folder instead. 
 
 ---
 
